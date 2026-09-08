@@ -610,33 +610,61 @@ $ReleasesPage.Controls.Add($ReleaseGrid)
 
 $ReleaseActionPanel = New-Object System.Windows.Forms.FlowLayoutPanel
 $ReleaseActionPanel.Dock = 'Bottom'
-$ReleaseActionPanel.Height = 54
+$ReleaseActionPanel.Height = 90
+$ReleaseActionPanel.FlowDirection = 'TopDown'
 $ReleaseActionPanel.Padding = New-Object System.Windows.Forms.Padding(8, 8, 8, 8)
 $ReleaseActionPanel.WrapContents = $false
 $ReleasesPage.Controls.Add($ReleaseActionPanel)
 
+$ReleaseInfoPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+$ReleaseInfoPanel.Width = 678
+$ReleaseInfoPanel.Height = 36
+$ReleaseInfoPanel.FlowDirection = 'LeftToRight'
+$ReleaseInfoPanel.WrapContents = $false
+$ReleaseInfoPanel.Padding = New-Object System.Windows.Forms.Padding(0)
+$ReleaseInfoPanel.Margin = New-Object System.Windows.Forms.Padding(0)
+$ReleaseActionPanel.Controls.Add($ReleaseInfoPanel)
+
+$ReleaseButtonPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+$ReleaseButtonPanel.Width = 678
+$ReleaseButtonPanel.Height = 36
+$ReleaseButtonPanel.FlowDirection = 'LeftToRight'
+$ReleaseButtonPanel.WrapContents = $false
+$ReleaseButtonPanel.Padding = New-Object System.Windows.Forms.Padding(0)
+$ReleaseButtonPanel.Margin = New-Object System.Windows.Forms.Padding(0)
+$ReleaseActionPanel.Controls.Add($ReleaseButtonPanel)
+
 $ReleaseStatus = New-Object System.Windows.Forms.Label
 $ReleaseStatus.AutoSize = $false
-$ReleaseStatus.Width = 300
+$ReleaseStatus.Width = 380
 $ReleaseStatus.Height = 32
+$ReleaseStatus.Margin = New-Object System.Windows.Forms.Padding(0, 2, 8, 2)
 $ReleaseStatus.TextAlign = 'MiddleLeft'
 $ReleaseStatus.Text = 'Noch keine Releases geladen.'
-$ReleaseActionPanel.Controls.Add($ReleaseStatus)
+$ReleaseInfoPanel.Controls.Add($ReleaseStatus)
 
 $RefreshReleasesButton = New-Object System.Windows.Forms.Button
 $RefreshReleasesButton.Text = 'Releases aktualisieren'
 $RefreshReleasesButton.Width = 155
 $RefreshReleasesButton.Height = 32
-$ReleaseActionPanel.Controls.Add($RefreshReleasesButton)
+$RefreshReleasesButton.Margin = New-Object System.Windows.Forms.Padding(0, 2, 8, 2)
+$ReleaseInfoPanel.Controls.Add($RefreshReleasesButton)
 
 $UpdateBridgeButton = New-Object System.Windows.Forms.Button
 $UpdateBridgeButton.Text = 'Update Bridge'
 $UpdateBridgeButton.Width = 170
 $UpdateBridgeButton.Height = 32
 $UpdateBridgeButton.Enabled = $true
-$ReleaseActionPanel.Controls.Add($UpdateBridgeButton)
+$UpdateBridgeButton.Margin = New-Object System.Windows.Forms.Padding(0, 2, 8, 2)
+$ReleaseButtonPanel.Controls.Add($UpdateBridgeButton)
 $ReleaseToolTip = New-Object System.Windows.Forms.ToolTip
 $ReleaseToolTip.SetToolTip($UpdateBridgeButton, 'Lädt das neueste Windows-WSL-Release-Archiv von GitHub und installiert die Bridge daraus.')
+
+$ReleaseActionPanel.Add_Resize({
+    $RowWidth = [Math]::Max(0, $ReleaseActionPanel.ClientSize.Width)
+    $ReleaseInfoPanel.Width = $RowWidth
+    $ReleaseButtonPanel.Width = $RowWidth
+})
 
 $HelpGrid = New-Object System.Windows.Forms.DataGridView
 $HelpGrid.Dock = 'Fill'
@@ -663,7 +691,7 @@ $HelpGrid.Columns['element'].FillWeight = 34
 $HelpGrid.Columns['purpose'].FillWeight = 66
 
 $HelpRows = @(
-    @('Manager (Tab)', 'Zeigt den aktuellen Status und enthält die Aktionen für Aktivierung, Deaktivierung, Verbindungstest und Deinstallation der Bridge.'),
+    @('Manager (Tab)', 'Zeigt den aktuellen Status und enthält die Aktionen für Aktivierung, Deaktivierung und Verbindungstest.'),
     @('Settings (Tab)', 'Hier werden WSL-Distribution, Agent, Zugriffsmodus und Arbeitsbereich eingestellt.'),
     @('Log (Tab)', 'Zeigt Zeitstempel sowie Informations- und Fehlermeldungen des Managers.'),
     @('Help (Tab)', 'Diese Übersicht der Tabs, Eingaben, Zugriffsmodi und Buttons.'),
@@ -680,7 +708,7 @@ $HelpRows = @(
     @('Test Codex connection', 'Sendet eine kurze Testnachricht im Read-only-Modus an Codex und zeigt die Agent-Antwort in einem Windows-Dialog.'),
     @('Enable agent for tasks', 'Aktiviert den Agenten für neue, in Firefox bestätigte Aufgaben.'),
     @('Disable agent and cancel runs', 'Deaktiviert den Agenten und fordert die Beendigung aktiver Aufgaben an.'),
-    @('Uninstall Windows bridge', 'Entfernt die Windows-Bridge. Einstellungen und Laufhistorie in WSL bleiben erhalten.'),
+    @('Uninstall Windows bridge (Releases-Tab)', 'Entfernt die Windows-Bridge. Einstellungen und Laufhistorie in WSL bleiben erhalten.'),
     @('Firefox / Aufgabe bestätigen', 'Der Agent läuft nicht dauerhaft. Erst nach der sichtbaren Bestätigung einer Aufgabe startet Firefox den Agenten.'),
     @('relay-config.txt', 'Enthält die technische Verbindung von Windows zur WSL-Distribution. Die eigentliche Agentenkonfiguration wird separat in WSL gespeichert.'),
     @('Releases (Tab)', 'Zeigt die auf GitHub veröffentlichten Versionen tabellarisch an.'),
@@ -695,21 +723,35 @@ foreach ($HelpRow in $HelpRows) {
 }
 $HelpPage.Controls.Add($HelpGrid)
 
-$ButtonPanel = New-Object System.Windows.Forms.TableLayoutPanel
+$ButtonPanel = New-Object System.Windows.Forms.FlowLayoutPanel
 $ButtonPanel.Left = 10
 $ButtonPanel.Top = 400
 $ButtonPanel.Width = 674
 $ButtonPanel.Height = 100
-$ButtonPanel.ColumnCount = 2
-$ButtonPanel.RowCount = 2
-$ButtonPanel.GrowStyle = 'FixedSize'
+$ButtonPanel.FlowDirection = 'TopDown'
+$ButtonPanel.WrapContents = $false
 $ButtonPanel.Padding = New-Object System.Windows.Forms.Padding(0)
-[void]$ButtonPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
-[void]$ButtonPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
-[void]$ButtonPanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 50)))
-[void]$ButtonPanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+$ButtonPanel.AutoScroll = $false
 $ButtonPanel.Anchor = $AnchorBottomLeftRight
 $ManagerPage.Controls.Add($ButtonPanel)
+
+$ManagerFirstButtonRow = New-Object System.Windows.Forms.FlowLayoutPanel
+$ManagerFirstButtonRow.Width = 674
+$ManagerFirstButtonRow.Height = 40
+$ManagerFirstButtonRow.FlowDirection = 'LeftToRight'
+$ManagerFirstButtonRow.WrapContents = $false
+$ManagerFirstButtonRow.Padding = New-Object System.Windows.Forms.Padding(0)
+$ManagerFirstButtonRow.Margin = New-Object System.Windows.Forms.Padding(0)
+$ButtonPanel.Controls.Add($ManagerFirstButtonRow)
+
+$ManagerSecondButtonRow = New-Object System.Windows.Forms.FlowLayoutPanel
+$ManagerSecondButtonRow.Width = 674
+$ManagerSecondButtonRow.Height = 40
+$ManagerSecondButtonRow.FlowDirection = 'LeftToRight'
+$ManagerSecondButtonRow.WrapContents = $false
+$ManagerSecondButtonRow.Padding = New-Object System.Windows.Forms.Padding(0)
+$ManagerSecondButtonRow.Margin = New-Object System.Windows.Forms.Padding(0)
+$ButtonPanel.Controls.Add($ManagerSecondButtonRow)
 
 $SettingsButtonPanel = New-Object System.Windows.Forms.FlowLayoutPanel
 $SettingsButtonPanel.Left = 10
@@ -733,21 +775,16 @@ function Add-ActionButton {
         [string]$Text,
         [int]$Width,
         [scriptblock]$Action,
-        [System.Windows.Forms.Control]$Panel = $ButtonPanel,
-        [int]$Column = -1,
-        [int]$Row = -1
+        [System.Windows.Forms.Control]$Panel = $ButtonPanel
     )
     $Button = New-Object System.Windows.Forms.Button
     $Button.Text = $Text
     $Button.Width = $Width
     $Button.Height = 34
     $Button.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
+    $Button.Margin = New-Object System.Windows.Forms.Padding(0, 3, 8, 3)
     $Button.Add_Click($Action)
-    if ($Panel -is [System.Windows.Forms.TableLayoutPanel] -and $Column -ge 0 -and $Row -ge 0) {
-        $Panel.Controls.Add($Button, $Column, $Row)
-    } else {
-        $Panel.Controls.Add($Button)
-    }
+    $Panel.Controls.Add($Button)
     return $Button
 }
 
@@ -766,7 +803,7 @@ $EnableButton = Add-ActionButton 'Enable agent for tasks' 180 {
         Write-Status 'Agent enabled. Firefox will start it automatically for confirmed tasks.'
         Update-ActionButtons $true ([pscustomobject]@{ enabled = $true })
     } catch { Write-ErrorStatus $_.Exception.Message }
-} -Column 0 -Row 0
+} -Panel $ManagerFirstButtonRow
 
 $DisableButton = Add-ActionButton 'Disable agent and cancel runs' 220 {
     try {
@@ -775,23 +812,7 @@ $DisableButton = Add-ActionButton 'Disable agent and cancel runs' 220 {
         Write-Status "Agent disabled. Active agent processes cancelled: $Stopped."
         Update-ActionButtons $true ([pscustomobject]@{ enabled = $false })
     } catch { Write-ErrorStatus $_.Exception.Message }
-} -Column 1 -Row 0
-
-$UninstallButton = Add-ActionButton 'Uninstall Windows bridge' 190 {
-    $Choice = [System.Windows.Forms.MessageBox]::Show(
-        'Uninstall the bridge? Agent settings and run history in WSL will be kept.',
-        'Projekt Kanban Agent Manager',
-        [System.Windows.Forms.MessageBoxButtons]::YesNo,
-        [System.Windows.Forms.MessageBoxIcon]::Warning
-    )
-    if ($Choice -ne [System.Windows.Forms.DialogResult]::Yes) { return }
-    try {
-        $Output = @(& $UninstallScript 2>&1)
-        if ($LASTEXITCODE -ne 0) { throw ($Output -join "`n") }
-        Write-Status ($Output -join "`r`n")
-        Update-ActionButtons $false $null
-    } catch { Write-ErrorStatus $_.Exception.Message }
-} -Column 0 -Row 1
+} -Panel $ManagerFirstButtonRow
 
 $TestButton = Add-ActionButton 'Test Codex connection' 180 {
     try {
@@ -807,7 +828,23 @@ $TestButton = Add-ActionButton 'Test Codex connection' 180 {
         )
         Update-ActionButtons $true $Saved.agent
     } catch { Write-ErrorStatus $_.Exception.Message }
-} -Column 1 -Row 1
+} -Panel $ManagerSecondButtonRow
+
+$UninstallButton = Add-ActionButton 'Uninstall Windows bridge' 190 {
+    $Choice = [System.Windows.Forms.MessageBox]::Show(
+        'Uninstall the bridge? Agent settings and run history in WSL will be kept.',
+        'Projekt Kanban Agent Manager',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+    )
+    if ($Choice -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    try {
+        $Output = @(& $UninstallScript 2>&1)
+        if ($LASTEXITCODE -ne 0) { throw ($Output -join "`n") }
+        Write-Status ($Output -join "`r`n")
+        Update-ActionButtons $false $null
+    } catch { Write-ErrorStatus $_.Exception.Message }
+} -Panel $ReleaseButtonPanel
 
 $RefreshReleasesButton.Add_Click({ Refresh-Releases })
 $UpdateBridgeButton.Add_Click({
