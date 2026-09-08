@@ -944,7 +944,7 @@ $ConnectionTestWorker.Add_DoWork({
 $ConnectionTestWorker.Add_RunWorkerCompleted({
     param($Sender, $EventArgs)
     if ($null -ne $EventArgs.Error) {
-        Write-ErrorStatus $EventArgs.Error.Exception.Message
+        Write-ErrorStatus $EventArgs.Error.Message
         Update-ActionButtons $true ([pscustomobject]@{ enabled = $true })
         return
     }
