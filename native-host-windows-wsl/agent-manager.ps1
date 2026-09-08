@@ -362,9 +362,11 @@ function Get-WslHostPath {
     return ([string]$Output[-1]).Trim()
 }
 
-function Invoke-ManagerHost {
-    param([string[]]$Arguments)
-    $Distribution = Get-Distribution
+function Invoke-ManagerHostForDistribution {
+    param(
+        [Parameter(Mandatory = $true)][string]$Distribution,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
     $HostPath = Get-WslHostPath $Distribution
     $Output = @(& $WslCommand.Path --distribution $Distribution --exec python3 $HostPath @Arguments 2>&1)
     $Text = ($Output -join "`n").Trim()
@@ -383,6 +385,11 @@ function Invoke-ManagerHost {
     return $Response.data
 }
 
+function Invoke-ManagerHost {
+    param([string[]]$Arguments)
+    return Invoke-ManagerHostForDistribution (Get-Distribution) $Arguments
+}
+
 function Get-SandboxValue {
     switch ([string]$SandboxBox.SelectedItem) {
         'Read-only (Dry Run)' { return 'read-only' }
@@ -392,7 +399,41 @@ function Get-SandboxValue {
     }
 }
 
+function Save-AgentConfigurationValues {
+    param(
+        [Parameter(Mandatory = $true)][string]$Distribution,
+        [Parameter(Mandatory = $true)][string]$AgentId,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string]$Sandbox,
+        [Parameter(Mandatory = $true)][string]$Workspace
+    )
+    if (-not $AgentId -or -not $Label -or -not $Executable) {
+        throw 'Agent ID, display name, and executable are required.'
+    }
+    if ($Sandbox -ne 'danger-full-access' -and -not $Workspace) {
+        throw 'A workspace is required for this access mode.'
+    }
+    if ($Sandbox -eq 'danger-full-access') {
+        $Workspace = '__HOME__'
+    }
+    return Invoke-ManagerHostForDistribution $Distribution @(
+        '--manager-configure-local', $AgentId, $Label, $Executable, $Sandbox, $Workspace
+    )
+}
+
 function Save-AgentConfiguration {
+    $AgentInput = Get-AgentConfigurationInput
+    return Save-AgentConfigurationValues `
+        -Distribution $AgentInput.Distribution `
+        -AgentId $AgentInput.AgentId `
+        -Label $AgentInput.Label `
+        -Executable $AgentInput.Executable `
+        -Sandbox $AgentInput.Sandbox `
+        -Workspace $AgentInput.Workspace
+}
+
+function Get-AgentConfigurationInput {
     $AgentId = $AgentIdBox.Text.Trim()
     $Label = $AgentLabelBox.Text.Trim()
     $Executable = $ExecutableBox.Text.Trim()
@@ -407,10 +448,14 @@ function Save-AgentConfiguration {
     if ($Sandbox -eq 'danger-full-access') {
         $Workspace = '__HOME__'
     }
-    $Data = Invoke-ManagerHost @(
-        '--manager-configure-local', $AgentId, $Label, $Executable, $Sandbox, $Workspace
-    )
-    return $Data
+    return [pscustomobject]@{
+        Distribution = Get-Distribution
+        AgentId = $AgentId
+        Label = $Label
+        Executable = $Executable
+        Sandbox = $Sandbox
+        Workspace = $Workspace
+    }
 }
 
 $SaveButton = $null
@@ -418,6 +463,7 @@ $TestButton = $null
 $EnableButton = $null
 $DisableButton = $null
 $UninstallButton = $null
+$ConnectionTestWorker = New-Object System.ComponentModel.BackgroundWorker
 
 function Update-ActionButtons {
     param([bool]$BridgeAvailable, [object]$Agent)
@@ -868,19 +914,72 @@ $DisableButton = Add-ActionButton 'Disable agent and cancel runs' 220 {
     } catch { Write-ErrorStatus $_.Exception.Message }
 } -Panel $ManagerFirstButtonRow
 
-$TestButton = Add-ActionButton 'Test Codex connection' 180 {
+$ConnectionTestWorker.Add_DoWork({
+    param($Sender, $EventArgs)
+    $AgentInput = $EventArgs.Argument
     try {
-        $Saved = Save-AgentConfiguration
-        $Data = Invoke-ManagerHost @('--manager-test', $AgentIdBox.Text.Trim())
-        $Message = "Prompt: $($Data.prompt)`r`n`r`nAgent-Antwort:`r`n$($Data.message)"
-        Write-Status $Message
-        [void][System.Windows.Forms.MessageBox]::Show(
-            $Message,
-            'Agent-Verbindungstest',
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Information
-        )
-        Update-ActionButtons $true $Saved.agent
+        $Saved = Save-AgentConfigurationValues `
+            -Distribution $AgentInput.Distribution `
+            -AgentId $AgentInput.AgentId `
+            -Label $AgentInput.Label `
+            -Executable $AgentInput.Executable `
+            -Sandbox $AgentInput.Sandbox `
+            -Workspace $AgentInput.Workspace
+        $Data = Invoke-ManagerHostForDistribution `
+            -Distribution $AgentInput.Distribution `
+            -Arguments @('--manager-test', $AgentInput.AgentId)
+        $EventArgs.Result = [pscustomobject]@{
+            Succeeded = $true
+            Saved = $Saved
+            Data = $Data
+        }
+    } catch {
+        $EventArgs.Result = [pscustomobject]@{
+            Succeeded = $false
+            ErrorMessage = $_.Exception.Message
+        }
+    }
+})
+
+$ConnectionTestWorker.Add_RunWorkerCompleted({
+    param($Sender, $EventArgs)
+    if ($null -ne $EventArgs.Error) {
+        Write-ErrorStatus $EventArgs.Error.Exception.Message
+        Update-ActionButtons $true ([pscustomobject]@{ enabled = $true })
+        return
+    }
+    $Result = $EventArgs.Result
+    if ($null -eq $Result -or -not $Result.Succeeded) {
+        $Message = if ($null -ne $Result -and $Result.ErrorMessage) { [string]$Result.ErrorMessage } else { 'Der Verbindungstest ist fehlgeschlagen.' }
+        Write-ErrorStatus $Message
+        Update-ActionButtons $true ([pscustomobject]@{ enabled = $true })
+        return
+    }
+    $Data = $Result.Data
+    $Message = "Prompt: $($Data.prompt)`r`n`r`nAgent-Antwort:`r`n$($Data.message)"
+    Write-Status $Message
+    [void][System.Windows.Forms.MessageBox]::Show(
+        $Message,
+        'Agent-Verbindungstest',
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information
+    )
+    Update-ActionButtons $true $Result.Saved.agent
+})
+
+$TestButton = Add-ActionButton 'Test Codex connection' 180 {
+    if ($ConnectionTestWorker.IsBusy) {
+        return
+    }
+    try {
+        $AgentInput = Get-AgentConfigurationInput
+        foreach ($Button in @($SaveButton, $EnableButton, $DisableButton, $TestButton, $UninstallButton)) {
+            if ($null -ne $Button) {
+                $Button.Enabled = $false
+            }
+        }
+        Write-Status 'Verbindungstest läuft im Hintergrund. Die Antwort kann bis zu 90 Sekunden dauern …'
+        $ConnectionTestWorker.RunWorkerAsync($AgentInput)
     } catch { Write-ErrorStatus $_.Exception.Message }
 } -Panel $ManagerSecondButtonRow
 

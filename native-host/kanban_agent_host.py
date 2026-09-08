@@ -540,18 +540,45 @@ def extract_test_response(output: str, adapter: str) -> str:
 
 
 def extract_test_error(output: str) -> str:
+    decoder = json.JSONDecoder()
     for line in reversed(output.splitlines()):
+        candidate = line.strip()
+        if not candidate:
+            continue
+        events: list[dict[str, Any]] = []
         try:
-            event = json.loads(line)
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                events.append(parsed)
         except json.JSONDecodeError:
-            continue
-        if not isinstance(event, dict):
-            continue
-        error = event.get("error")
-        if isinstance(error, dict) and error.get("message"):
-            return truncate_text(str(error["message"]), 2000)
-        if event.get("type") in {"error", "turn.failed"} and event.get("message"):
-            return truncate_text(str(event["message"]), 2000)
+            pass
+        if not events:
+            for offset, character in enumerate(candidate):
+                if character != "{":
+                    continue
+                try:
+                    parsed, _ = decoder.raw_decode(candidate[offset:])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed, dict):
+                    events.append(parsed)
+                    break
+        for event in events:
+            error = event.get("error")
+            if isinstance(error, dict) and error.get("message"):
+                message = str(error["message"])
+            elif event.get("type") in {"error", "turn.failed"} and event.get("message"):
+                message = str(event["message"])
+            else:
+                continue
+            if "requires a newer version of Codex" in message:
+                return truncate_text(
+                    "Die installierte Codex-App/CLI-Version ist zu alt. "
+                    + message
+                    + " Bitte Codex auf die aktuelle Version aktualisieren.",
+                    2000,
+                )
+            return truncate_text(message, 2000)
     return ""
 
 
