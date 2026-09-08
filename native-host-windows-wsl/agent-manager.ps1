@@ -588,6 +588,7 @@ $ReleaseGrid.AllowUserToResizeRows = $false
 $ReleaseGrid.MultiSelect = $false
 $ReleaseGrid.RowHeadersVisible = $false
 $ReleaseGrid.SelectionMode = 'FullRowSelect'
+$ReleaseGrid.ClipboardCopyMode = 'EnableAlwaysIncludeHeaderText'
 $ReleaseGrid.AutoSizeColumnsMode = 'Fill'
 $ReleaseGrid.AutoSizeRowsMode = 'AllCells'
 $ReleaseGrid.ColumnHeadersHeightSizeMode = 'AutoSize'
@@ -634,12 +635,18 @@ $ReleaseButtonPanel.Padding = New-Object System.Windows.Forms.Padding(0)
 $ReleaseButtonPanel.Margin = New-Object System.Windows.Forms.Padding(0)
 $ReleaseActionPanel.Controls.Add($ReleaseButtonPanel)
 
-$ReleaseStatus = New-Object System.Windows.Forms.Label
+$ReleaseStatus = New-Object System.Windows.Forms.TextBox
 $ReleaseStatus.AutoSize = $false
 $ReleaseStatus.Width = 380
 $ReleaseStatus.Height = 32
+$ReleaseStatus.Multiline = $true
+$ReleaseStatus.ReadOnly = $true
+$ReleaseStatus.BorderStyle = 'None'
+$ReleaseStatus.BackColor = [System.Drawing.SystemColors]::Control
+$ReleaseStatus.WordWrap = $true
+$ReleaseStatus.ScrollBars = 'None'
+$ReleaseStatus.ShortcutsEnabled = $true
 $ReleaseStatus.Margin = New-Object System.Windows.Forms.Padding(0, 2, 8, 2)
-$ReleaseStatus.TextAlign = 'MiddleLeft'
 $ReleaseStatus.Text = 'Noch keine Releases geladen.'
 $ReleaseInfoPanel.Controls.Add($ReleaseStatus)
 
@@ -675,6 +682,7 @@ $HelpGrid.AllowUserToResizeRows = $false
 $HelpGrid.MultiSelect = $false
 $HelpGrid.RowHeadersVisible = $false
 $HelpGrid.SelectionMode = 'FullRowSelect'
+$HelpGrid.ClipboardCopyMode = 'EnableAlwaysIncludeHeaderText'
 $HelpGrid.AutoSizeColumnsMode = 'Fill'
 $HelpGrid.AutoSizeRowsMode = 'AllCells'
 $HelpGrid.ColumnHeadersHeightSizeMode = 'AutoSize'
@@ -716,6 +724,7 @@ $HelpRows = @(
     @('Update Bridge', 'Installiert das neueste Windows-WSL-Release-Archiv direkt von GitHub.'),
     @("Manager-Version $ManagerVersion", 'Die Version der Windows-Manager-Oberfläche. Die Native-Host-Version wird beim Bridge-Test separat geprüft.'),
     @('Fenstergröße ändern', 'Der Tab-Rahmen, die Statusanzeige und die Eingabefelder passen ihre Größe automatisch an. Die Button-Leisten bleiben unten angedockt.'),
+    @('Text kopieren', 'Text in Status-, Log- und Eingabefeldern markieren und mit Strg+C kopieren. In den Tabellen eine Zeile markieren und ebenfalls Strg+C verwenden.'),
     @('GitHub-Zugriff', 'Die Release-Tabelle lädt die GitHub-API. Wenn das Repository privat ist, kann die Release-Seite trotzdem über den Update-Button im Browser geöffnet werden.')
 )
 foreach ($HelpRow in $HelpRows) {
