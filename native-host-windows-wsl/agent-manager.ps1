@@ -11,6 +11,17 @@ $GitHubReleasesApi = 'https://api.github.com/repos/ecxod/projekt-kanban-agent-ma
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace ProjektKanbanAgentManager {
+    public static class NativeMethods {
+        [DllImport("user32.dll")]
+        public static extern bool ShowScrollBar(IntPtr hWnd, uint wBar, bool bShow);
+    }
+}
+'@
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $ScriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -94,7 +105,22 @@ function Write-Log {
     $LogBox.AppendText("[$Timestamp] $Message`r`n")
     $LogBox.SelectionStart = $LogBox.TextLength
     $LogBox.ScrollToCaret()
+    Update-LogScrollBar
     [System.Windows.Forms.Application]::DoEvents()
+}
+
+function Update-LogScrollBar {
+    if ($null -eq $LogBox -or -not $LogBox.IsHandleCreated) {
+        return
+    }
+    $LastIndex = [Math]::Max(0, $LogBox.TextLength - 1)
+    $LastPosition = $LogBox.GetPositionFromCharIndex($LastIndex)
+    $NeedsVerticalScrollBar = ($LastPosition.Y + $LogBox.Font.Height + 2) -gt $LogBox.ClientSize.Height
+    [void][ProjektKanbanAgentManager.NativeMethods]::ShowScrollBar(
+        $LogBox.Handle,
+        1,
+        $NeedsVerticalScrollBar
+    )
 }
 
 function Write-Status {
@@ -655,7 +681,6 @@ $ReleaseStatus.ScrollBars = 'None'
 $ReleaseStatus.ShortcutsEnabled = $true
 $ReleaseStatus.Margin = New-Object System.Windows.Forms.Padding(0, 2, 8, 2)
 $ReleaseStatus.Text = 'Noch keine Releases geladen.'
-$ReleaseInfoPanel.Controls.Add($ReleaseStatus)
 
 $RefreshReleasesButton = New-Object System.Windows.Forms.Button
 $RefreshReleasesButton.Text = 'Releases aktualisieren'
@@ -663,6 +688,7 @@ $RefreshReleasesButton.Width = 155
 $RefreshReleasesButton.Height = 32
 $RefreshReleasesButton.Margin = New-Object System.Windows.Forms.Padding(0, 2, 8, 2)
 $ReleaseInfoPanel.Controls.Add($RefreshReleasesButton)
+$ReleaseInfoPanel.Controls.Add($ReleaseStatus)
 
 $UpdateBridgeButton = New-Object System.Windows.Forms.Button
 $UpdateBridgeButton.Text = 'Update Bridge'
@@ -782,8 +808,20 @@ $SettingsPage.Controls.Add($SettingsButtonPanel)
 function Resize-PageLayout {
     $ButtonMargin = 10
     $ButtonPanel.Top = [Math]::Max(400, $ManagerPage.ClientSize.Height - $ButtonPanel.Height - $ButtonMargin)
+    $ManagerRightMargin = 16
+    $StatusBox.Width = [Math]::Max(120, $ManagerPage.ClientSize.Width - $StatusBox.Left - $ManagerRightMargin)
+    $ButtonPanel.Width = [Math]::Max(120, $ManagerPage.ClientSize.Width - $ButtonPanel.Left - $ManagerRightMargin)
+    $ManagerFirstButtonRow.Width = $ButtonPanel.ClientSize.Width
+    $ManagerSecondButtonRow.Width = $ButtonPanel.ClientSize.Width
     $StatusBox.Height = [Math]::Max(120, $ButtonPanel.Top - $StatusBox.Top - $ButtonMargin)
     $SettingsButtonPanel.Top = [Math]::Max(400, $SettingsPage.ClientSize.Height - $SettingsButtonPanel.Height - $ButtonMargin)
+    $SettingsRightMargin = 16
+    $SettingsInputWidth = [Math]::Max(200, $SettingsPage.ClientSize.Width - $DistributionBox.Left - $SettingsRightMargin)
+    foreach ($Control in @($DistributionBox, $AgentIdBox, $AgentLabelBox, $ExecutableBox, $SandboxBox, $WorkspaceBox, $WorkspaceHint)) {
+        $Control.Width = $SettingsInputWidth
+    }
+    $SettingsButtonPanel.Width = [Math]::Max(120, $SettingsPage.ClientSize.Width - $SettingsButtonPanel.Left - $SettingsRightMargin)
+    Update-LogScrollBar
 }
 
 function Add-ActionButton {
@@ -879,6 +917,7 @@ $SandboxBox.Add_SelectedIndexChanged({
 })
 $ManagerPage.Add_Resize({ Resize-PageLayout })
 $SettingsPage.Add_Resize({ Resize-PageLayout })
+$LogPage.Add_Resize({ Update-LogScrollBar })
 $DistributionBox.Add_SelectedIndexChanged({ Refresh-Status })
 $Form.Add_Shown({ Resize-PageLayout; Refresh-Status; Refresh-Releases })
 
