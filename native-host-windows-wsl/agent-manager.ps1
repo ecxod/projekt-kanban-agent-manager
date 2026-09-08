@@ -279,7 +279,7 @@ function Refresh-Releases {
         } else {
             $ReleaseGrid.Rows[0].Selected = $true
             $SkippedText = if ($Skipped -gt 0) { " $Skipped Eintrag(e) übersprungen." } else { '' }
-            Set-ReleaseStatus "$($ReleaseGrid.Rows.Count) Release(s) geladen.$SkippedText Eine Zeile auswählen und „Update / Bridge installieren“ klicken."
+            Set-ReleaseStatus "$($ReleaseGrid.Rows.Count) Release(s) geladen.$SkippedText Für das neueste Release „Update Bridge“ klicken."
         }
         Write-Log "INFO: GitHub-Releases geladen: $($ReleaseGrid.Rows.Count); übersprungen: $Skipped"
     } catch {
@@ -320,7 +320,7 @@ function Get-Distribution {
 function Get-WslHostPath {
     param([string]$Distribution)
     if (-not (Test-Path -LiteralPath $InstalledHost -PathType Leaf)) {
-        throw 'The bridge is not installed yet. Click "Install / update bridge" first.'
+        throw 'The bridge is not installed yet. Open Releases and click "Update Bridge" first.'
     }
     $Output = @(& $WslCommand.Path --distribution $Distribution --exec wslpath -a -u $InstalledHost)
     if ($LASTEXITCODE -ne 0 -or $Output.Count -eq 0) {
@@ -617,7 +617,7 @@ $ReleasesPage.Controls.Add($ReleaseActionPanel)
 
 $ReleaseStatus = New-Object System.Windows.Forms.Label
 $ReleaseStatus.AutoSize = $false
-$ReleaseStatus.Width = 380
+$ReleaseStatus.Width = 300
 $ReleaseStatus.Height = 32
 $ReleaseStatus.TextAlign = 'MiddleLeft'
 $ReleaseStatus.Text = 'Noch keine Releases geladen.'
@@ -629,14 +629,14 @@ $RefreshReleasesButton.Width = 155
 $RefreshReleasesButton.Height = 32
 $ReleaseActionPanel.Controls.Add($RefreshReleasesButton)
 
-$OpenReleaseButton = New-Object System.Windows.Forms.Button
-$OpenReleaseButton.Text = 'Update / Bridge installieren'
-$OpenReleaseButton.Width = 170
-$OpenReleaseButton.Height = 32
-$OpenReleaseButton.Enabled = $true
-$ReleaseActionPanel.Controls.Add($OpenReleaseButton)
+$UpdateBridgeButton = New-Object System.Windows.Forms.Button
+$UpdateBridgeButton.Text = 'Update Bridge'
+$UpdateBridgeButton.Width = 170
+$UpdateBridgeButton.Height = 32
+$UpdateBridgeButton.Enabled = $true
+$ReleaseActionPanel.Controls.Add($UpdateBridgeButton)
 $ReleaseToolTip = New-Object System.Windows.Forms.ToolTip
-$ReleaseToolTip.SetToolTip($OpenReleaseButton, 'Lädt das passende Windows-WSL-Release-Archiv von GitHub und installiert die Bridge daraus.')
+$ReleaseToolTip.SetToolTip($UpdateBridgeButton, 'Lädt das neueste Windows-WSL-Release-Archiv von GitHub und installiert die Bridge daraus.')
 
 $HelpGrid = New-Object System.Windows.Forms.DataGridView
 $HelpGrid.Dock = 'Fill'
@@ -663,7 +663,7 @@ $HelpGrid.Columns['element'].FillWeight = 34
 $HelpGrid.Columns['purpose'].FillWeight = 66
 
 $HelpRows = @(
-    @('Manager (Tab)', 'Zeigt den aktuellen Status und enthält die Aktionen für Installation, Aktivierung, Deaktivierung und Verbindungstest.'),
+    @('Manager (Tab)', 'Zeigt den aktuellen Status und enthält die Aktionen für Aktivierung, Deaktivierung, Verbindungstest und Deinstallation der Bridge.'),
     @('Settings (Tab)', 'Hier werden WSL-Distribution, Agent, Zugriffsmodus und Arbeitsbereich eingestellt.'),
     @('Log (Tab)', 'Zeigt Zeitstempel sowie Informations- und Fehlermeldungen des Managers.'),
     @('Help (Tab)', 'Diese Übersicht der Tabs, Eingaben, Zugriffsmodi und Buttons.'),
@@ -676,7 +676,6 @@ $HelpRows = @(
     @('Read-only (Dry Run)', 'Der Agent darf analysieren und einen Plan erstellen, aber keine Dateien ändern.'),
     @('Workspace write', 'Der Agent darf innerhalb des eingestellten Arbeitsbereichs Dateien lesen und ändern.'),
     @('Unrestricted access', 'Der Agent darf auf das gesamte Benutzerkonto zugreifen. Nur verwenden, wenn dieses zusätzliche Risiko ausdrücklich akzeptiert wird.'),
-    @('Install / update bridge', 'Installiert oder aktualisiert die Windows-WSL-Bridge und führt den Selbsttest aus.'),
     @('Save agent configuration', 'Speichert die Werte aus Settings in der Konfiguration des Native Host in WSL.'),
     @('Test Codex connection', 'Sendet eine kurze Testnachricht im Read-only-Modus an Codex und zeigt die Agent-Antwort in einem Windows-Dialog.'),
     @('Enable agent for tasks', 'Aktiviert den Agenten für neue, in Firefox bestätigte Aufgaben.'),
@@ -686,7 +685,7 @@ $HelpRows = @(
     @('relay-config.txt', 'Enthält die technische Verbindung von Windows zur WSL-Distribution. Die eigentliche Agentenkonfiguration wird separat in WSL gespeichert.'),
     @('Releases (Tab)', 'Zeigt die auf GitHub veröffentlichten Versionen tabellarisch an.'),
     @('Releases aktualisieren', 'Lädt die aktuelle Release-Liste des GitHub-Repositories neu.'),
-    @('Update / Bridge installieren', 'Lädt das passende Windows-WSL-Release-Archiv von GitHub und installiert die Bridge daraus.'),
+    @('Update Bridge', 'Installiert das neueste Windows-WSL-Release-Archiv direkt von GitHub.'),
     @("Manager-Version $ManagerVersion", 'Die Version der Windows-Manager-Oberfläche. Die Native-Host-Version wird beim Bridge-Test separat geprüft.'),
     @('Fenstergröße ändern', 'Der Tab-Rahmen, die Statusanzeige und die Eingabefelder passen ihre Größe automatisch an. Die Button-Leisten bleiben unten angedockt.'),
     @('GitHub-Zugriff', 'Die Release-Tabelle lädt die GitHub-API. Wenn das Repository privat ist, kann die Release-Seite trotzdem über den Update-Button im Browser geöffnet werden.')
@@ -696,13 +695,19 @@ foreach ($HelpRow in $HelpRows) {
 }
 $HelpPage.Controls.Add($HelpGrid)
 
-$ButtonPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+$ButtonPanel = New-Object System.Windows.Forms.TableLayoutPanel
 $ButtonPanel.Left = 10
 $ButtonPanel.Top = 400
 $ButtonPanel.Width = 674
 $ButtonPanel.Height = 100
-$ButtonPanel.AutoSize = $false
-$ButtonPanel.WrapContents = $true
+$ButtonPanel.ColumnCount = 2
+$ButtonPanel.RowCount = 2
+$ButtonPanel.GrowStyle = 'FixedSize'
+$ButtonPanel.Padding = New-Object System.Windows.Forms.Padding(0)
+[void]$ButtonPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+[void]$ButtonPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+[void]$ButtonPanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+[void]$ButtonPanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 50)))
 $ButtonPanel.Anchor = $AnchorBottomLeftRight
 $ManagerPage.Controls.Add($ButtonPanel)
 
@@ -724,24 +729,26 @@ function Resize-PageLayout {
 }
 
 function Add-ActionButton {
-    param([string]$Text, [int]$Width, [scriptblock]$Action, [System.Windows.Forms.FlowLayoutPanel]$Panel = $ButtonPanel)
+    param(
+        [string]$Text,
+        [int]$Width,
+        [scriptblock]$Action,
+        [System.Windows.Forms.Control]$Panel = $ButtonPanel,
+        [int]$Column = -1,
+        [int]$Row = -1
+    )
     $Button = New-Object System.Windows.Forms.Button
     $Button.Text = $Text
     $Button.Width = $Width
     $Button.Height = 34
+    $Button.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
     $Button.Add_Click($Action)
-    $Panel.Controls.Add($Button)
+    if ($Panel -is [System.Windows.Forms.TableLayoutPanel] -and $Column -ge 0 -and $Row -ge 0) {
+        $Panel.Controls.Add($Button, $Column, $Row)
+    } else {
+        $Panel.Controls.Add($Button)
+    }
     return $Button
-}
-
-$InstallButton = Add-ActionButton 'Install / update bridge' 210 {
-    try {
-        if (Get-Process -Name 'projekt-kanban-agent-wsl' -ErrorAction SilentlyContinue) {
-            throw 'Firefox is still using the bridge. Close Firefox completely and try again.'
-        }
-        Write-Status 'Latest GitHub bridge release is being downloaded and installed …'
-        Update-BridgeFromLatestRelease
-    } catch { Write-ErrorStatus $_.Exception.Message }
 }
 
 $SaveButton = Add-ActionButton 'Save agent configuration' 210 {
@@ -759,7 +766,7 @@ $EnableButton = Add-ActionButton 'Enable agent for tasks' 180 {
         Write-Status 'Agent enabled. Firefox will start it automatically for confirmed tasks.'
         Update-ActionButtons $true ([pscustomobject]@{ enabled = $true })
     } catch { Write-ErrorStatus $_.Exception.Message }
-}
+} -Column 0 -Row 0
 
 $DisableButton = Add-ActionButton 'Disable agent and cancel runs' 220 {
     try {
@@ -768,7 +775,7 @@ $DisableButton = Add-ActionButton 'Disable agent and cancel runs' 220 {
         Write-Status "Agent disabled. Active agent processes cancelled: $Stopped."
         Update-ActionButtons $true ([pscustomobject]@{ enabled = $false })
     } catch { Write-ErrorStatus $_.Exception.Message }
-}
+} -Column 1 -Row 0
 
 $UninstallButton = Add-ActionButton 'Uninstall Windows bridge' 190 {
     $Choice = [System.Windows.Forms.MessageBox]::Show(
@@ -784,7 +791,7 @@ $UninstallButton = Add-ActionButton 'Uninstall Windows bridge' 190 {
         Write-Status ($Output -join "`r`n")
         Update-ActionButtons $false $null
     } catch { Write-ErrorStatus $_.Exception.Message }
-}
+} -Column 0 -Row 1
 
 $TestButton = Add-ActionButton 'Test Codex connection' 180 {
     try {
@@ -800,30 +807,13 @@ $TestButton = Add-ActionButton 'Test Codex connection' 180 {
         )
         Update-ActionButtons $true $Saved.agent
     } catch { Write-ErrorStatus $_.Exception.Message }
-}
+} -Column 1 -Row 1
 
 $RefreshReleasesButton.Add_Click({ Refresh-Releases })
-$ReleaseGrid.Add_SelectionChanged({
-    $OpenReleaseButton.Enabled = $true
-})
-$OpenReleaseButton.Add_Click({
+$UpdateBridgeButton.Add_Click({
     try {
-        if ($ReleaseGrid.SelectedRows.Count -eq 0) {
-            throw 'Bitte zuerst ein Release auswählen.'
-        }
-        $SelectedRelease = $ReleaseGrid.SelectedRows[0].Tag
-        $SelectedAsset = Get-ReleaseBridgeAsset $SelectedRelease
-        if ($null -eq $SelectedAsset) {
-            $ReleaseUrl = [string](Get-JsonPropertyValue $SelectedRelease 'html_url')
-            if ([string]::IsNullOrWhiteSpace($ReleaseUrl)) {
-                $ReleaseUrl = "$GitHubRepository/releases"
-            }
-            Start-Process -FilePath $ReleaseUrl
-            Set-ReleaseStatus 'Kein passendes Bridge-Archiv gefunden. GitHub-Release geöffnet.' $true
-            return
-        }
-        Install-BridgeFromRelease $SelectedRelease $SelectedAsset
-        Refresh-Status
+        Write-Status 'Latest GitHub bridge release is being downloaded and installed …'
+        Update-BridgeFromLatestRelease
     } catch {
         Write-ErrorStatus $_.Exception.Message
     }
