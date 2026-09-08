@@ -152,8 +152,17 @@ static int base64_value(unsigned char character) {
     return -1;
 }
 
-static unsigned char *base64_decode(const char *input, DWORD length, DWORD *output_length) {
+static unsigned char *base64_decode(
+    const char *input,
+    DWORD length,
+    DWORD *output_length,
+    DWORD *failure_offset,
+    unsigned char *failure_byte
+) {
+    if (failure_offset) *failure_offset = (DWORD)-1;
+    if (failure_byte) *failure_byte = 0;
     if (length == 0 || length % 4U != 0) {
+        if (failure_offset) *failure_offset = length;
         return NULL;
     }
     DWORD padding = 0;
@@ -177,6 +186,12 @@ static unsigned char *base64_decode(const char *input, DWORD length, DWORD *outp
         int d = input[source] == '=' ? 0 : base64_value((unsigned char)input[source]);
         source++;
         if (a < 0 || b < 0 || c < 0 || d < 0) {
+            DWORD offset = source - 4U;
+            if (a >= 0) offset++;
+            if (b >= 0) offset++;
+            if (c >= 0) offset++;
+            if (failure_offset) *failure_offset = offset;
+            if (failure_byte && offset < length) *failure_byte = (unsigned char)input[offset];
             free(output);
             return NULL;
         }
@@ -188,6 +203,79 @@ static unsigned char *base64_decode(const char *input, DWORD length, DWORD *outp
     }
     *output_length = decoded_length;
     return output;
+}
+
+static void log_base64_failure(
+    const wchar_t *prefix,
+    const char *line,
+    DWORD line_length,
+    DWORD failure_offset,
+    unsigned char failure_byte
+) {
+    wchar_t message[1024];
+    const wchar_t *reason = line_length == 0U
+        ? L"empty line"
+        : (line_length % 4U != 0U ? L"line length is not divisible by 4" : L"invalid Base64 character");
+    int written = _snwprintf(
+        message,
+        sizeof(message) / sizeof(message[0]),
+        L"%ls reason=%ls lineLength=%lu failureOffset=%ls failureByte=0x%02X firstBytesHex=",
+        prefix,
+        reason,
+        (unsigned long)line_length,
+        failure_offset == (DWORD)-1 ? L"n/a" : L"set",
+        (unsigned int)failure_byte
+    );
+    if (written < 0) return;
+    if (failure_offset != (DWORD)-1 && written + 24 < (int)(sizeof(message) / sizeof(message[0]))) {
+        int offset_written = _snwprintf(
+            message + written,
+            sizeof(message) / sizeof(message[0]) - (size_t)written,
+            L" (at %lu)",
+            (unsigned long)failure_offset
+        );
+        if (offset_written > 0) written += offset_written;
+    }
+    DWORD preview_length = line_length < 96U ? line_length : 96U;
+    for (DWORD index = 0; index < preview_length && written + 3 < (int)(sizeof(message) / sizeof(message[0])); index++) {
+        int byte_written = _snwprintf(
+            message + written,
+            sizeof(message) / sizeof(message[0]) - (size_t)written,
+            L"%02X",
+            (unsigned int)(unsigned char)line[index]
+        );
+        if (byte_written <= 0) break;
+        written += byte_written;
+    }
+    if (line_length > preview_length && written + 8 < (int)(sizeof(message) / sizeof(message[0]))) {
+        _snwprintf(message + written, sizeof(message) / sizeof(message[0]) - (size_t)written, L"...");
+    }
+    if (line_length >= 2U && line_length % 2U == 0U) {
+        DWORD utf16_length = line_length / 2U;
+        if (utf16_length > 240U) utf16_length = 240U;
+        int looks_utf16 = 1;
+        for (DWORD index = 0; index < utf16_length; index++) {
+            if (line[index * 2U + 1U] != 0) {
+                looks_utf16 = 0;
+                break;
+            }
+        }
+        if (looks_utf16 && written + 20 < (int)(sizeof(message) / sizeof(message[0]))) {
+            wchar_t text[241];
+            for (DWORD index = 0; index < utf16_length; index++) {
+                text[index] = (wchar_t)((unsigned char)line[index * 2U] | ((unsigned short)(unsigned char)line[index * 2U + 1U] << 8));
+            }
+            text[utf16_length] = L'\0';
+            int text_written = _snwprintf(
+                message + written,
+                sizeof(message) / sizeof(message[0]) - (size_t)written,
+                L" utf16Preview=\"%ls\"",
+                text
+            );
+            if (text_written > 0) written += text_written;
+        }
+    }
+    log_error(message);
 }
 
 static int reader_byte(buffered_reader *reader, unsigned char *value) {
@@ -356,7 +444,7 @@ static int start_wsl_child(
         _snwprintf(
             command,
             command_size,
-            L"\"%ls\" --distribution \"%ls\" --exec python3 \"%ls\" --base64-native-bridge",
+            L"\"%ls\" --distribution %ls --exec python3 \"%ls\" --base64-native-bridge",
             wsl_path,
             distribution,
             host_path
@@ -368,8 +456,9 @@ static int start_wsl_child(
             L"\"%ls\" --exec python3 \"%ls\" --base64-native-bridge",
             wsl_path,
             host_path
-        );
+            );
     }
+    log_error(command);
 
     STARTUPINFOW startup;
     PROCESS_INFORMATION process;
@@ -380,8 +469,14 @@ static int start_wsl_child(
     startup.hStdInput = stdin_read;
     startup.hStdOutput = stdout_write;
     startup.hStdError = stderr_log != INVALID_HANDLE_VALUE ? stderr_log : GetStdHandle(STD_ERROR_HANDLE);
+    /*
+     * Let Windows resolve the executable from the command line.  Passing
+     * wsl_path both as lpApplicationName and as argv[0] looks equivalent,
+     * but the WSL launcher interprets the latter itself and can then lose
+     * the --distribution argument when started from a native host.
+     */
     BOOL started = CreateProcessW(
-        wsl_path,
+        NULL,
         command,
         NULL,
         NULL,
@@ -397,6 +492,14 @@ static int start_wsl_child(
     CloseHandle(stdout_write);
     if (stderr_log != INVALID_HANDLE_VALUE) CloseHandle(stderr_log);
     if (!started) {
+        wchar_t error_message[256];
+        _snwprintf(
+            error_message,
+            sizeof(error_message) / sizeof(error_message[0]),
+            L"CreateProcessW(wsl.exe) failed. Windows error=%lu.",
+            (unsigned long)GetLastError()
+        );
+        log_error(error_message);
         CloseHandle(child->stdin_write);
         CloseHandle(child->stdout_read);
         return 0;
@@ -414,12 +517,27 @@ static DWORD WINAPI relay_child_output(LPVOID parameter) {
         char *line = read_base64_line(&reader, &line_length);
         if (!line) break;
         DWORD message_length = 0;
-        unsigned char *message = base64_decode(line, line_length, &message_length);
-        free(line);
+        DWORD failure_offset = (DWORD)-1;
+        unsigned char failure_byte = 0;
+        unsigned char *message = base64_decode(
+            line,
+            line_length,
+            &message_length,
+            &failure_offset,
+            &failure_byte
+        );
         if (!message) {
-            log_error(L"Invalid base64 response from WSL native host.");
+            log_base64_failure(
+                L"Invalid base64 response from WSL native host.",
+                line,
+                line_length,
+                failure_offset,
+                failure_byte
+            );
+            free(line);
             break;
         }
+        free(line);
         unsigned char header[4] = {
             (unsigned char)(message_length & 0xffU),
             (unsigned char)((message_length >> 8) & 0xffU),
@@ -471,6 +589,7 @@ static int relay_browser_input(HANDLE browser_input, HANDLE child_input) {
 static int self_test(child_process *child) {
     static const unsigned char request[] =
         "{\"kind\":\"request\",\"requestId\":\"relay-self-test\",\"action\":\"hello\",\"payload\":{}}";
+    log_error(L"Relay self-test sending request: action=hello requestId=relay-self-test.");
     DWORD encoded_length = 0;
     char *encoded = base64_encode(request, (DWORD)strlen((const char *)request), &encoded_length);
     if (!encoded) return self_test_error(21, L"Relay self-test could not encode its request.");
@@ -485,9 +604,27 @@ static int self_test(child_process *child) {
     char *line = read_base64_line(&reader, &line_length);
     if (!line) return self_test_error(23, L"Relay self-test received no response line from the WSL native host.");
     DWORD response_length = 0;
-    unsigned char *response = base64_decode(line, line_length, &response_length);
+    DWORD failure_offset = (DWORD)-1;
+    unsigned char failure_byte = 0;
+    unsigned char *response = base64_decode(
+        line,
+        line_length,
+        &response_length,
+        &failure_offset,
+        &failure_byte
+    );
+    if (!response) {
+        log_base64_failure(
+            L"Relay self-test received an invalid base64 response from WSL.",
+            line,
+            line_length,
+            failure_offset,
+            failure_byte
+        );
+        free(line);
+        return self_test_error(24, L"Relay self-test received an invalid base64 response from WSL. See relay.log for line diagnostics.");
+    }
     free(line);
-    if (!response) return self_test_error(24, L"Relay self-test received an invalid base64 response from WSL.");
     char *text = (char *)malloc((size_t)response_length + 1U);
     if (!text) {
         free(response);
@@ -496,6 +633,15 @@ static int self_test(child_process *child) {
     memcpy(text, response, response_length);
     text[response_length] = '\0';
     free(response);
+    {
+        wchar_t decoded_message[768];
+        int decoded_count = MultiByteToWideChar(CP_UTF8, 0, text, -1, decoded_message, sizeof(decoded_message) / sizeof(decoded_message[0]));
+        if (decoded_count > 0) {
+            log_error(decoded_message);
+        } else {
+            log_error(L"Relay self-test decoded a response that was not valid UTF-8.");
+        }
+    }
     int success = strstr(text, "\"requestId\":\"relay-self-test\"") != NULL &&
                   strstr(text, "\"ok\":true") != NULL &&
                   strstr(text, "\"name\":\"de.projekt_kanban.agent\"") != NULL &&

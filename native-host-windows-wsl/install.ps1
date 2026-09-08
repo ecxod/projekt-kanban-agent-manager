@@ -8,10 +8,17 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $HostName = 'de.projekt_kanban.agent'
-$ExpectedVersion = '0.1.7'
 $ExtensionId = 'projekt-kanban-agent@ecxod.de'
 $ScriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PackageDirectory = Split-Path -Parent $ScriptDirectory
+$VersionFile = Join-Path $PackageDirectory 'VERSION'
+if (-not (Test-Path -LiteralPath $VersionFile -PathType Leaf)) {
+    throw "The VERSION file is missing: $VersionFile"
+}
+$ExpectedVersion = ((Get-Content -LiteralPath $VersionFile -TotalCount 1) -join '').Trim()
+if (-not [regex]::IsMatch($ExpectedVersion, '^\d+(\.\d+){3}$')) {
+    throw "The VERSION file contains an invalid version: $ExpectedVersion"
+}
 $SourceHost = Join-Path $PackageDirectory 'native-host\kanban_agent_host.py'
 $SourceSchema = Join-Path $PackageDirectory 'native-host\feedback-schema.json'
 $SourceRelay = Join-Path $ScriptDirectory 'projekt-kanban-agent-wsl.exe'
@@ -26,6 +33,7 @@ if (-not (Test-Path -LiteralPath $SourceHost -PathType Leaf) -or
 $InstallDirectory = Join-Path $env:LOCALAPPDATA 'ProjektKanbanAgent'
 $InstalledHost = Join-Path $InstallDirectory 'kanban_agent_host.py'
 $InstalledSchema = Join-Path $InstallDirectory 'feedback-schema.json'
+$InstalledVersion = Join-Path $InstallDirectory 'VERSION'
 $RelayPath = Join-Path $InstallDirectory 'projekt-kanban-agent-wsl.exe'
 $RelayConfigPath = Join-Path $InstallDirectory 'relay-config.txt'
 $LegacyBatchPath = Join-Path $InstallDirectory 'projekt-kanban-agent-wsl.bat'
@@ -39,6 +47,7 @@ if (Get-Process -Name 'projekt-kanban-agent-wsl' -ErrorAction SilentlyContinue) 
 New-Item -ItemType Directory -Path $InstallDirectory -Force | Out-Null
 Copy-Item -LiteralPath $SourceHost -Destination $InstalledHost -Force
 Copy-Item -LiteralPath $SourceSchema -Destination $InstalledSchema -Force
+Copy-Item -LiteralPath $VersionFile -Destination $InstalledVersion -Force
 Copy-Item -LiteralPath $SourceRelay -Destination $RelayPath -Force
 
 $DistributionArguments = @()

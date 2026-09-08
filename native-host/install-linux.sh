@@ -8,11 +8,18 @@ install_dir="$data_base/projekt-kanban-agent"
 manifest_dir="$user_home/.mozilla/native-messaging-hosts"
 manifest_path="$manifest_dir/de.projekt_kanban.agent.json"
 host_path="$install_dir/kanban_agent_host.py"
+version_path="$script_dir/../VERSION"
+
+if [ ! -f "$version_path" ]; then
+    printf '%s\n' "VERSION file is missing: $version_path" >&2
+    exit 1
+fi
 
 install -d -m 0700 "$install_dir"
 install -d -m 0700 "$manifest_dir"
 install -m 0755 "$script_dir/kanban_agent_host.py" "$host_path"
 install -m 0644 "$script_dir/feedback-schema.json" "$install_dir/feedback-schema.json"
+install -m 0644 "$version_path" "$install_dir/VERSION"
 
 python3 - "$host_path" "$manifest_path" <<'PY'
 import json

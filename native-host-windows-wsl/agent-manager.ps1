@@ -6,6 +6,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$GitHubRepository = 'https://github.com/ecxod/projekt-kanban-agent-manager'
+$GitHubReleasesApi = 'https://api.github.com/repos/ecxod/projekt-kanban-agent-manager/releases?per_page=20'
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
@@ -16,6 +19,14 @@ $InstallScript = Join-Path $ScriptDirectory 'install.ps1'
 $UninstallScript = Join-Path $ScriptDirectory 'uninstall.ps1'
 $InstallDirectory = Join-Path $env:LOCALAPPDATA 'ProjektKanbanAgent'
 $InstalledHost = Join-Path $InstallDirectory 'kanban_agent_host.py'
+$VersionFile = Join-Path $PackageDirectory 'VERSION'
+if (-not (Test-Path -LiteralPath $VersionFile -PathType Leaf)) {
+    throw "Die Versionsdatei fehlt: $VersionFile"
+}
+$ManagerVersion = ((Get-Content -LiteralPath $VersionFile -TotalCount 1) -join '').Trim()
+if (-not [regex]::IsMatch($ManagerVersion, '^\d+(\.\d+){3}$')) {
+    throw "Ungültige Manager-Version in VERSION: $ManagerVersion"
+}
 $WslCommand = Get-Command 'wsl.exe' -ErrorAction Stop
 
 function Normalize-DistributionName {
@@ -104,6 +115,191 @@ function Write-ErrorStatus {
     $StatusBox.ScrollToCaret()
     Write-Log "ERROR: $Message"
     [System.Windows.Forms.Application]::DoEvents()
+}
+
+function Set-ReleaseStatus {
+    param([string]$Message, [bool]$Error = $false)
+    $ReleaseStatus.ForeColor = if ($Error) { [System.Drawing.Color]::DarkRed } else { [System.Drawing.Color]::DimGray }
+    $ReleaseStatus.Text = $Message
+    [System.Windows.Forms.Application]::DoEvents()
+}
+
+function Get-JsonPropertyValue {
+    param(
+        [AllowNull()][object]$Object,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+    if ($null -eq $Object) {
+        return $null
+    }
+    $Property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $Property) {
+        return $null
+    }
+    return $Property.Value
+}
+
+function Get-ReleaseVersion {
+    param([object]$Release)
+    $Tag = [string](Get-JsonPropertyValue $Release 'tag_name')
+    if ([string]::IsNullOrWhiteSpace($Tag)) {
+        return ''
+    }
+    return ($Tag.Trim() -replace '^v', '')
+}
+
+function Get-ReleaseBridgeAsset {
+    param([object]$Release)
+    $Version = Get-ReleaseVersion $Release
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        return $null
+    }
+    $ExpectedName = "projekt-kanban-agent-manager-$Version-windows-wsl.zip"
+    foreach ($Asset in @(Get-JsonPropertyValue $Release 'assets')) {
+        if ([string](Get-JsonPropertyValue $Asset 'name') -eq $ExpectedName) {
+            return $Asset
+        }
+    }
+    return $null
+}
+
+function Install-BridgeFromRelease {
+    param(
+        [Parameter(Mandatory = $true)][object]$Release,
+        [Parameter(Mandatory = $true)][object]$Asset
+    )
+    $Version = Get-ReleaseVersion $Release
+    $DownloadUrl = [string](Get-JsonPropertyValue $Asset 'browser_download_url')
+    if ([string]::IsNullOrWhiteSpace($Version) -or [string]::IsNullOrWhiteSpace($DownloadUrl)) {
+        throw 'Das ausgewählte GitHub-Release enthält kein gültiges Bridge-Archiv.'
+    }
+    if (Get-Process -Name 'projekt-kanban-agent-wsl' -ErrorAction SilentlyContinue) {
+        throw 'Firefox verwendet die Bridge noch. Firefox vollständig schließen und das Update erneut starten.'
+    }
+
+    $TemporaryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("projekt-kanban-agent-manager-update-" + [guid]::NewGuid().ToString('N'))
+    $ArchivePath = Join-Path $TemporaryDirectory "projekt-kanban-agent-manager-$Version-windows-wsl.zip"
+    try {
+        New-Item -ItemType Directory -Path $TemporaryDirectory -Force | Out-Null
+        Write-Status "Bridge-Release $Version wird von GitHub heruntergeladen …"
+        Invoke-WebRequest -Uri $DownloadUrl -OutFile $ArchivePath -Headers @{
+                Accept = 'application/zip'
+                'User-Agent' = 'Projekt-Kanban-Agent-Manager'
+            } -UseBasicParsing -TimeoutSec 120
+        Expand-Archive -LiteralPath $ArchivePath -DestinationPath $TemporaryDirectory -Force
+
+        $DownloadedInstaller = @(Get-ChildItem -LiteralPath $TemporaryDirectory -Filter 'install.ps1' -File -Recurse |
+                Where-Object { $_.FullName -match '\\native-host-windows-wsl\\install\.ps1$' } |
+                Select-Object -First 1)
+        if ($DownloadedInstaller.Count -eq 0) {
+            throw 'Das Bridge-Release enthält kein gültiges Windows-WSL-Installationsskript.'
+        }
+        $DownloadedPackageDirectory = Split-Path -Parent (Split-Path -Parent $DownloadedInstaller[0].FullName)
+        $DownloadedVersionFile = Join-Path $DownloadedPackageDirectory 'VERSION'
+        if (-not (Test-Path -LiteralPath $DownloadedVersionFile -PathType Leaf)) {
+            throw 'Das Bridge-Release enthält keine VERSION-Datei.'
+        }
+        $DownloadedVersion = ((Get-Content -LiteralPath $DownloadedVersionFile -TotalCount 1) -join '').Trim()
+        if ($DownloadedVersion -ne $Version) {
+            throw "Versionskonflikt im Bridge-Release: Tag $Version, Paket $DownloadedVersion."
+        }
+
+        $Distribution = Get-Distribution
+        $Output = @(& $DownloadedInstaller[0].FullName -Distribution $Distribution 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+            throw ($Output -join "`n")
+        }
+        $Saved = Save-AgentConfiguration
+        Write-Status (($Output -join "`r`n") + "`r`nBridge-Release $Version installiert. Agent-Konfiguration gespeichert.")
+        Update-ActionButtons $true $Saved.agent
+    } finally {
+        if (Test-Path -LiteralPath $TemporaryDirectory) {
+            Remove-Item -LiteralPath $TemporaryDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Refresh-Releases {
+    try {
+        Set-ReleaseStatus 'GitHub-Releases werden geladen …'
+        $Tls12 = [System.Net.SecurityProtocolType]::Tls12
+        [System.Net.ServicePointManager]::SecurityProtocol = $Tls12
+        Write-Log "INFO: GitHub-Releases angefragt: $GitHubReleasesApi"
+        $Response = Invoke-RestMethod -Method Get -Uri $GitHubReleasesApi -Headers @{
+                Accept = 'application/vnd.github+json'
+                'User-Agent' = 'Projekt-Kanban-Agent-Manager'
+            } -UseBasicParsing -TimeoutSec 15
+
+        $Releases = @()
+        if ($null -eq $Response) {
+            Write-Log 'INFO: GitHub API hat eine leere Release-Liste zurückgegeben.'
+        } else {
+            $ApiMessage = [string](Get-JsonPropertyValue $Response 'message')
+            $ApiDocumentation = [string](Get-JsonPropertyValue $Response 'documentation_url')
+            $ApiTag = Get-JsonPropertyValue $Response 'tag_name'
+            if ($ApiMessage -and $null -eq $ApiTag) {
+                $ApiDetails = if ($ApiDocumentation) { " Details: $ApiDocumentation" } else { '' }
+                throw "GitHub API meldet: $ApiMessage.$ApiDetails"
+            }
+            $Releases = @($Response)
+            if ($Releases.Count -eq 0) {
+                Write-Log 'INFO: GitHub API hat eine leere Release-Liste zurückgegeben.'
+            }
+        }
+
+        $ReleaseGrid.Rows.Clear()
+        $Skipped = 0
+        foreach ($Release in $Releases) {
+            $Tag = [string](Get-JsonPropertyValue $Release 'tag_name')
+            if ([string]::IsNullOrWhiteSpace($Tag)) {
+                $Skipped++
+                continue
+            }
+            $Name = [string](Get-JsonPropertyValue $Release 'name')
+            if (-not $Name) { $Name = $Tag }
+            $Published = [string](Get-JsonPropertyValue $Release 'published_at')
+            if ($Published) {
+                try { $Published = ([datetime]$Published).ToLocalTime().ToString('yyyy-MM-dd HH:mm') } catch {}
+            }
+            $Draft = [bool](Get-JsonPropertyValue $Release 'draft')
+            $Prerelease = [bool](Get-JsonPropertyValue $Release 'prerelease')
+            $State = if ($Draft) { 'Entwurf' } elseif ($Prerelease) { 'Vorabversion' } else { 'Release' }
+            $Assets = @(Get-JsonPropertyValue $Release 'assets').Count
+            $RowIndex = $ReleaseGrid.Rows.Add($Tag, $Name, $Published, $State, [string]$Assets)
+            $ReleaseGrid.Rows[$RowIndex].Tag = $Release
+        }
+        if ($ReleaseGrid.Rows.Count -eq 0) {
+            if ($Skipped -gt 0) {
+                Set-ReleaseStatus "Keine gültigen Releases gefunden ($Skipped Eintrag ohne tag_name). Quelle: $GitHubRepository/releases"
+            } else {
+                Set-ReleaseStatus "Keine Releases gefunden. Im Manager-Repository ist noch kein Release veröffentlicht. Quelle: $GitHubRepository/releases"
+            }
+        } else {
+            $ReleaseGrid.Rows[0].Selected = $true
+            $SkippedText = if ($Skipped -gt 0) { " $Skipped Eintrag(e) übersprungen." } else { '' }
+            Set-ReleaseStatus "$($ReleaseGrid.Rows.Count) Release(s) geladen.$SkippedText Eine Zeile auswählen und „Update / Bridge installieren“ klicken."
+        }
+        Write-Log "INFO: GitHub-Releases geladen: $($ReleaseGrid.Rows.Count); übersprungen: $Skipped"
+    } catch {
+        $ReleaseGrid.Rows.Clear()
+        Set-ReleaseStatus "GitHub-Releases konnten nicht geladen werden: $($_.Exception.Message)" $true
+        Write-Log "ERROR: GitHub-Releases konnten nicht geladen werden: $($_.Exception.Message) Quelle: $GitHubReleasesApi"
+    }
+}
+
+function Update-BridgeFromLatestRelease {
+    Refresh-Releases
+    if ($ReleaseGrid.Rows.Count -eq 0) {
+        throw 'Auf GitHub wurde kein Manager-Release mit Windows-WSL-Bridge gefunden.'
+    }
+    $LatestRelease = $ReleaseGrid.Rows[0].Tag
+    $LatestAsset = Get-ReleaseBridgeAsset $LatestRelease
+    if ($null -eq $LatestAsset) {
+        $Version = Get-ReleaseVersion $LatestRelease
+        throw "Das GitHub-Release $Version enthält kein passendes Windows-WSL-Bridge-Archiv."
+    }
+    Install-BridgeFromRelease $LatestRelease $LatestAsset
+    Refresh-Status
 }
 
 function Get-Distribution {
@@ -222,7 +418,7 @@ function Refresh-Status {
 }
 
 $Form = New-Object System.Windows.Forms.Form
-$Form.Text = 'Projekt Kanban Agent Manager'
+$Form.Text = "Projekt Kanban Agent Manager $ManagerVersion"
 $Form.StartPosition = 'CenterScreen'
 $Form.ClientSize = New-Object System.Drawing.Size(710, 600)
 $Form.MinimumSize = New-Object System.Drawing.Size(726, 639)
@@ -246,15 +442,33 @@ $HelpPage.Text = 'Help'
 [void]$Tabs.TabPages.Add($LogPage)
 [void]$Tabs.TabPages.Add($HelpPage)
 $Form.Controls.Add($Tabs)
+$AnchorTopLeftRight = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+$AnchorTopRight = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
+$AnchorLeftRight = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+$AnchorBottomLeftRight = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+$AnchorAll = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+$Tabs.Anchor = $AnchorAll
 
 $Title = New-Object System.Windows.Forms.Label
 $Title.Text = 'Projekt Kanban Agent Manager'
 $Title.Left = 16
 $Title.Top = 18
-$Title.Width = 650
+$Title.Width = 500
 $Title.Height = 34
 $Title.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 18)
+$Title.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
 $ManagerPage.Controls.Add($Title)
+
+$VersionLabel = New-Object System.Windows.Forms.Label
+$VersionLabel.Text = "Version $ManagerVersion"
+$VersionLabel.Left = 535
+$VersionLabel.Top = 27
+$VersionLabel.Width = 135
+$VersionLabel.Height = 24
+$VersionLabel.TextAlign = 'MiddleRight'
+$VersionLabel.ForeColor = [System.Drawing.Color]::DimGray
+$VersionLabel.Anchor = $AnchorTopRight
+$ManagerPage.Controls.Add($VersionLabel)
 
 $Description = New-Object System.Windows.Forms.Label
 $Description.Text = 'Installs the Windows-WSL bridge and manages a local Codex agent.'
@@ -263,6 +477,7 @@ $Description.Top = 55
 $Description.Width = 650
 $Description.Height = 25
 $Description.ForeColor = [System.Drawing.Color]::DimGray
+$Description.Anchor = $AnchorTopLeftRight
 $ManagerPage.Controls.Add($Description)
 
 $SettingsTitle = New-Object System.Windows.Forms.Label
@@ -272,6 +487,7 @@ $SettingsTitle.Top = 18
 $SettingsTitle.Width = 650
 $SettingsTitle.Height = 34
 $SettingsTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 18)
+$SettingsTitle.Anchor = $AnchorTopLeftRight
 $SettingsPage.Controls.Add($SettingsTitle)
 
 Add-Label 'WSL distribution' 98 $SettingsPage | Out-Null
@@ -280,6 +496,7 @@ $DistributionBox.Left = 205
 $DistributionBox.Top = 94
 $DistributionBox.Width = 455
 $DistributionBox.DropDownStyle = 'DropDown'
+$DistributionBox.Anchor = $AnchorTopLeftRight
 $SettingsPage.Controls.Add($DistributionBox)
 
 $InitialDistribution = Normalize-DistributionName $InitialDistribution
@@ -296,16 +513,20 @@ if ($InitialDistribution -and $DistributionBox.Items.Contains($InitialDistributi
 
 Add-Label 'Agent ID' 140 $SettingsPage | Out-Null
 $AgentIdBox = New-TextBox 140 'local-codex' $SettingsPage
+$AgentIdBox.Anchor = $AnchorLeftRight
 Add-Label 'Display name' 182 $SettingsPage | Out-Null
 $AgentLabelBox = New-TextBox 182 'Codex in WSL' $SettingsPage
+$AgentLabelBox.Anchor = $AnchorLeftRight
 Add-Label 'Agent executable (WSL)' 224 $SettingsPage | Out-Null
 $ExecutableBox = New-TextBox 224 "/mnt/c/Users/$env:USERNAME/.codex/bin/wsl/codex" $SettingsPage
+$ExecutableBox.Anchor = $AnchorLeftRight
 Add-Label 'Access mode' 266 $SettingsPage | Out-Null
 $SandboxBox = New-Object System.Windows.Forms.ComboBox
 $SandboxBox.Left = 205
 $SandboxBox.Top = 262
 $SandboxBox.Width = 455
 $SandboxBox.DropDownStyle = 'DropDownList'
+$SandboxBox.Anchor = $AnchorLeftRight
 [void]$SandboxBox.Items.Add('Read-only (Dry Run)')
 [void]$SandboxBox.Items.Add('Workspace write')
 [void]$SandboxBox.Items.Add('Unrestricted access')
@@ -314,6 +535,7 @@ $SettingsPage.Controls.Add($SandboxBox)
 
 $WorkspaceLabel = Add-Label 'Workspace (WSL)' 308 $SettingsPage
 $WorkspaceBox = New-TextBox 308 "/mnt/c/Users/$env:USERNAME/projekt-kanban" $SettingsPage
+$WorkspaceBox.Anchor = $AnchorLeftRight
 $WorkspaceHint = New-Object System.Windows.Forms.Label
 $WorkspaceHint.Left = 205
 $WorkspaceHint.Top = 337
@@ -322,6 +544,7 @@ $WorkspaceHint.Height = 36
 $WorkspaceHint.Text = 'Can contain multiple projects. Unrestricted access uses the agent user home automatically.'
 $WorkspaceHint.ForeColor = [System.Drawing.Color]::DimGray
 $WorkspaceHint.Font = New-Object System.Drawing.Font('Segoe UI', 8.5)
+$WorkspaceHint.Anchor = $AnchorTopLeftRight
 $SettingsPage.Controls.Add($WorkspaceHint)
 
 $StatusBox = New-Object System.Windows.Forms.TextBox
@@ -334,6 +557,7 @@ $StatusBox.ReadOnly = $true
 $StatusBox.ScrollBars = 'Both'
 $StatusBox.WordWrap = $false
 $StatusBox.Text = 'Ready.'
+$StatusBox.Anchor = $AnchorTopLeftRight
 $ManagerPage.Controls.Add($StatusBox)
 
 $LogBox = New-Object System.Windows.Forms.TextBox
@@ -345,48 +569,126 @@ $LogBox.Dock = 'Fill'
 $LogBox.Font = New-Object System.Drawing.Font('Consolas', 9)
 $LogPage.Controls.Add($LogBox)
 
-$HelpBox = New-Object System.Windows.Forms.TextBox
-$HelpBox.Multiline = $true
-$HelpBox.ReadOnly = $true
-$HelpBox.ScrollBars = 'Vertical'
-$HelpBox.WordWrap = $true
-$HelpBox.Dock = 'Fill'
-$HelpBox.Font = New-Object System.Drawing.Font('Segoe UI', 10)
-$HelpBox.Text = @'
-Help for the Projekt Kanban Agent Manager
+$ReleasesPage = New-Object System.Windows.Forms.TabPage
+$ReleasesPage.Text = 'Releases'
+[void]$Tabs.TabPages.Add($ReleasesPage)
 
-Tabs
-Manager: Run actions and view the current status.
-Settings: Configure the WSL distribution, agent, executable, access mode, and workspace.
-Log: View timestamped information and error messages.
-Help: View this explanation.
+$ReleaseGrid = New-Object System.Windows.Forms.DataGridView
+$ReleaseGrid.Dock = 'Fill'
+$ReleaseGrid.ReadOnly = $true
+$ReleaseGrid.AllowUserToAddRows = $false
+$ReleaseGrid.AllowUserToDeleteRows = $false
+$ReleaseGrid.AllowUserToResizeRows = $false
+$ReleaseGrid.MultiSelect = $false
+$ReleaseGrid.RowHeadersVisible = $false
+$ReleaseGrid.SelectionMode = 'FullRowSelect'
+$ReleaseGrid.AutoSizeColumnsMode = 'Fill'
+$ReleaseGrid.AutoSizeRowsMode = 'AllCells'
+$ReleaseGrid.ColumnHeadersHeightSizeMode = 'AutoSize'
+$ReleaseGrid.BackgroundColor = [System.Drawing.SystemColors]::Window
+$ReleaseGrid.BorderStyle = 'None'
+$ReleaseGrid.GridColor = [System.Drawing.SystemColors]::ControlLight
+$ReleaseGrid.Font = New-Object System.Drawing.Font('Segoe UI', 10)
+$ReleaseGrid.DefaultCellStyle.WrapMode = 'True'
+[void]$ReleaseGrid.Columns.Add('version', 'Version')
+[void]$ReleaseGrid.Columns.Add('name', 'Name')
+[void]$ReleaseGrid.Columns.Add('published', 'Veröffentlicht')
+[void]$ReleaseGrid.Columns.Add('state', 'Status')
+[void]$ReleaseGrid.Columns.Add('assets', 'Dateien')
+$ReleaseGrid.Columns['version'].FillWeight = 20
+$ReleaseGrid.Columns['name'].FillWeight = 34
+$ReleaseGrid.Columns['published'].FillWeight = 22
+$ReleaseGrid.Columns['state'].FillWeight = 16
+$ReleaseGrid.Columns['assets'].FillWeight = 10
+$ReleasesPage.Controls.Add($ReleaseGrid)
 
-Settings
-WSL distribution: The Linux distribution where the Native Host and Codex run.
-Agent ID: The unique internal identifier of the agent.
-Display name: The readable name used in status messages.
-Agent executable (WSL): The absolute WSL path to the Codex executable.
-Access mode: Controls what the agent is allowed to change.
-Workspace (WSL): The directory where the agent is allowed to work.
+$ReleaseActionPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+$ReleaseActionPanel.Dock = 'Bottom'
+$ReleaseActionPanel.Height = 54
+$ReleaseActionPanel.Padding = New-Object System.Windows.Forms.Padding(8, 8, 8, 8)
+$ReleaseActionPanel.WrapContents = $false
+$ReleasesPage.Controls.Add($ReleaseActionPanel)
 
-Access modes
-Read-only (Dry Run): The agent may analyze, but cannot change files.
-Workspace write: The agent may read and write inside the configured workspace.
-Unrestricted access: The agent may access the entire agent user's account.
-Use this option only when you explicitly accept the additional risk.
+$ReleaseStatus = New-Object System.Windows.Forms.Label
+$ReleaseStatus.AutoSize = $false
+$ReleaseStatus.Width = 380
+$ReleaseStatus.Height = 32
+$ReleaseStatus.TextAlign = 'MiddleLeft'
+$ReleaseStatus.Text = 'Noch keine Releases geladen.'
+$ReleaseActionPanel.Controls.Add($ReleaseStatus)
 
-Buttons
-Install / update bridge: Installs the Windows-WSL bridge and runs its self-test.
-Save agent configuration: Saves the Settings values in WSL.
-Test Codex connection: Checks whether Codex and the workspace are reachable.
-Enable agent for tasks: Allows new tasks for this agent.
-Disable agent and cancel runs: Prevents new tasks and cancels active tasks.
-Uninstall Windows bridge: Removes the Windows bridge but keeps settings and run history.
+$RefreshReleasesButton = New-Object System.Windows.Forms.Button
+$RefreshReleasesButton.Text = 'Releases aktualisieren'
+$RefreshReleasesButton.Width = 155
+$RefreshReleasesButton.Height = 32
+$ReleaseActionPanel.Controls.Add($RefreshReleasesButton)
 
-The agent does not run permanently. Firefox starts Codex only after a task
-has been confirmed and sent from the Kanban page.
-'@
-$HelpPage.Controls.Add($HelpBox)
+$OpenReleaseButton = New-Object System.Windows.Forms.Button
+$OpenReleaseButton.Text = 'Update / Bridge installieren'
+$OpenReleaseButton.Width = 170
+$OpenReleaseButton.Height = 32
+$OpenReleaseButton.Enabled = $true
+$ReleaseActionPanel.Controls.Add($OpenReleaseButton)
+$ReleaseToolTip = New-Object System.Windows.Forms.ToolTip
+$ReleaseToolTip.SetToolTip($OpenReleaseButton, 'Lädt das passende Windows-WSL-Release-Archiv von GitHub und installiert die Bridge daraus.')
+
+$HelpGrid = New-Object System.Windows.Forms.DataGridView
+$HelpGrid.Dock = 'Fill'
+$HelpGrid.ReadOnly = $true
+$HelpGrid.AllowUserToAddRows = $false
+$HelpGrid.AllowUserToDeleteRows = $false
+$HelpGrid.AllowUserToResizeRows = $false
+$HelpGrid.MultiSelect = $false
+$HelpGrid.RowHeadersVisible = $false
+$HelpGrid.SelectionMode = 'FullRowSelect'
+$HelpGrid.AutoSizeColumnsMode = 'Fill'
+$HelpGrid.AutoSizeRowsMode = 'AllCells'
+$HelpGrid.ColumnHeadersHeightSizeMode = 'AutoSize'
+$HelpGrid.BackgroundColor = [System.Drawing.SystemColors]::Window
+$HelpGrid.BorderStyle = 'None'
+$HelpGrid.GridColor = [System.Drawing.SystemColors]::ControlLight
+$HelpGrid.Font = New-Object System.Drawing.Font('Segoe UI', 10)
+$HelpGrid.DefaultCellStyle.WrapMode = 'True'
+$HelpGrid.DefaultCellStyle.SelectionBackColor = [System.Drawing.SystemColors]::Highlight
+$HelpGrid.DefaultCellStyle.SelectionForeColor = [System.Drawing.SystemColors]::HighlightText
+[void]$HelpGrid.Columns.Add('element', 'Button / Eingabe / Tab')
+[void]$HelpGrid.Columns.Add('purpose', 'Was es tut / wofür es gebraucht wird')
+$HelpGrid.Columns['element'].FillWeight = 34
+$HelpGrid.Columns['purpose'].FillWeight = 66
+
+$HelpRows = @(
+    @('Manager (Tab)', 'Zeigt den aktuellen Status und enthält die Aktionen für Installation, Aktivierung, Deaktivierung und Verbindungstest.'),
+    @('Settings (Tab)', 'Hier werden WSL-Distribution, Agent, Zugriffsmodus und Arbeitsbereich eingestellt.'),
+    @('Log (Tab)', 'Zeigt Zeitstempel sowie Informations- und Fehlermeldungen des Managers.'),
+    @('Help (Tab)', 'Diese Übersicht der Tabs, Eingaben, Zugriffsmodi und Buttons.'),
+    @('WSL distribution', 'Die WSL-Distribution, in der der Native Host und Codex ausgeführt werden.'),
+    @('Agent ID', 'Eindeutige interne Kennung des Agenten, zum Beispiel local-codex.'),
+    @('Display name', 'Lesbarer Name des Agenten, der in Statusmeldungen angezeigt wird.'),
+    @('Agent executable (WSL)', 'Absoluter WSL-Pfad zum Codex-Programm, zum Beispiel /mnt/c/Users/Christian/.codex/bin/wsl/codex.'),
+    @('Access mode', 'Legt fest, welche Änderungen der Agent durchführen darf.'),
+    @('Workspace (WSL)', 'Arbeitsverzeichnis des Agenten. Bei eingeschränktem Zugriff darf er nur dort arbeiten.'),
+    @('Read-only (Dry Run)', 'Der Agent darf analysieren und einen Plan erstellen, aber keine Dateien ändern.'),
+    @('Workspace write', 'Der Agent darf innerhalb des eingestellten Arbeitsbereichs Dateien lesen und ändern.'),
+    @('Unrestricted access', 'Der Agent darf auf das gesamte Benutzerkonto zugreifen. Nur verwenden, wenn dieses zusätzliche Risiko ausdrücklich akzeptiert wird.'),
+    @('Install / update bridge', 'Installiert oder aktualisiert die Windows-WSL-Bridge und führt den Selbsttest aus.'),
+    @('Save agent configuration', 'Speichert die Werte aus Settings in der Konfiguration des Native Host in WSL.'),
+    @('Test Codex connection', 'Sendet eine kurze Testnachricht im Read-only-Modus an Codex und zeigt die Agent-Antwort in einem Windows-Dialog.'),
+    @('Enable agent for tasks', 'Aktiviert den Agenten für neue, in Firefox bestätigte Aufgaben.'),
+    @('Disable agent and cancel runs', 'Deaktiviert den Agenten und fordert die Beendigung aktiver Aufgaben an.'),
+    @('Uninstall Windows bridge', 'Entfernt die Windows-Bridge. Einstellungen und Laufhistorie in WSL bleiben erhalten.'),
+    @('Firefox / Aufgabe bestätigen', 'Der Agent läuft nicht dauerhaft. Erst nach der sichtbaren Bestätigung einer Aufgabe startet Firefox den Agenten.'),
+    @('relay-config.txt', 'Enthält die technische Verbindung von Windows zur WSL-Distribution. Die eigentliche Agentenkonfiguration wird separat in WSL gespeichert.'),
+    @('Releases (Tab)', 'Zeigt die auf GitHub veröffentlichten Versionen tabellarisch an.'),
+    @('Releases aktualisieren', 'Lädt die aktuelle Release-Liste des GitHub-Repositories neu.'),
+    @('Update / Bridge installieren', 'Lädt das passende Windows-WSL-Release-Archiv von GitHub und installiert die Bridge daraus.'),
+    @("Manager-Version $ManagerVersion", 'Die Version der Windows-Manager-Oberfläche. Die Native-Host-Version wird beim Bridge-Test separat geprüft.'),
+    @('Fenstergröße ändern', 'Der Tab-Rahmen, die Statusanzeige und die Eingabefelder passen ihre Größe automatisch an. Die Button-Leisten bleiben unten angedockt.'),
+    @('GitHub-Zugriff', 'Die Release-Tabelle lädt die GitHub-API. Wenn das Repository privat ist, kann die Release-Seite trotzdem über den Update-Button im Browser geöffnet werden.')
+)
+foreach ($HelpRow in $HelpRows) {
+    [void]$HelpGrid.Rows.Add($HelpRow[0], $HelpRow[1])
+}
+$HelpPage.Controls.Add($HelpGrid)
 
 $ButtonPanel = New-Object System.Windows.Forms.FlowLayoutPanel
 $ButtonPanel.Left = 10
@@ -395,6 +697,7 @@ $ButtonPanel.Width = 674
 $ButtonPanel.Height = 100
 $ButtonPanel.AutoSize = $false
 $ButtonPanel.WrapContents = $true
+$ButtonPanel.Anchor = $AnchorBottomLeftRight
 $ManagerPage.Controls.Add($ButtonPanel)
 
 $SettingsButtonPanel = New-Object System.Windows.Forms.FlowLayoutPanel
@@ -404,7 +707,15 @@ $SettingsButtonPanel.Width = 674
 $SettingsButtonPanel.Height = 100
 $SettingsButtonPanel.AutoSize = $false
 $SettingsButtonPanel.WrapContents = $true
+$SettingsButtonPanel.Anchor = $AnchorBottomLeftRight
 $SettingsPage.Controls.Add($SettingsButtonPanel)
+
+function Resize-PageLayout {
+    $ButtonMargin = 10
+    $ButtonPanel.Top = [Math]::Max(400, $ManagerPage.ClientSize.Height - $ButtonPanel.Height - $ButtonMargin)
+    $StatusBox.Height = [Math]::Max(120, $ButtonPanel.Top - $StatusBox.Top - $ButtonMargin)
+    $SettingsButtonPanel.Top = [Math]::Max(400, $SettingsPage.ClientSize.Height - $SettingsButtonPanel.Height - $ButtonMargin)
+}
 
 function Add-ActionButton {
     param([string]$Text, [int]$Width, [scriptblock]$Action, [System.Windows.Forms.FlowLayoutPanel]$Panel = $ButtonPanel)
@@ -422,13 +733,8 @@ $InstallButton = Add-ActionButton 'Install / update bridge' 210 {
         if (Get-Process -Name 'projekt-kanban-agent-wsl' -ErrorAction SilentlyContinue) {
             throw 'Firefox is still using the bridge. Close Firefox completely and try again.'
         }
-        Write-Status 'Installing and testing the bridge …'
-        $Distribution = Get-Distribution
-        $Output = @(& $InstallScript -Distribution $Distribution 2>&1)
-        if ($LASTEXITCODE -ne 0) { throw ($Output -join "`n") }
-        $Saved = Save-AgentConfiguration
-        Write-Status (($Output -join "`r`n") + "`r`nAgent configuration saved.")
-        Update-ActionButtons $true $Saved.agent
+        Write-Status 'Latest GitHub bridge release is being downloaded and installed …'
+        Update-BridgeFromLatestRelease
     } catch { Write-ErrorStatus $_.Exception.Message }
 }
 
@@ -477,18 +783,54 @@ $UninstallButton = Add-ActionButton 'Uninstall Windows bridge' 190 {
 $TestButton = Add-ActionButton 'Test Codex connection' 180 {
     try {
         $Saved = Save-AgentConfiguration
-        $Data = Invoke-ManagerHost @('--manager-ping', $AgentIdBox.Text.Trim())
-        Write-Status ([string]$Data.message)
+        $Data = Invoke-ManagerHost @('--manager-test', $AgentIdBox.Text.Trim())
+        $Message = "Prompt: $($Data.prompt)`r`n`r`nAgent-Antwort:`r`n$($Data.message)"
+        Write-Status $Message
+        [void][System.Windows.Forms.MessageBox]::Show(
+            $Message,
+            'Agent-Verbindungstest',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
         Update-ActionButtons $true $Saved.agent
     } catch { Write-ErrorStatus $_.Exception.Message }
 }
+
+$RefreshReleasesButton.Add_Click({ Refresh-Releases })
+$ReleaseGrid.Add_SelectionChanged({
+    $OpenReleaseButton.Enabled = $true
+})
+$OpenReleaseButton.Add_Click({
+    try {
+        if ($ReleaseGrid.SelectedRows.Count -eq 0) {
+            throw 'Bitte zuerst ein Release auswählen.'
+        }
+        $SelectedRelease = $ReleaseGrid.SelectedRows[0].Tag
+        $SelectedAsset = Get-ReleaseBridgeAsset $SelectedRelease
+        if ($null -eq $SelectedAsset) {
+            $ReleaseUrl = [string](Get-JsonPropertyValue $SelectedRelease 'html_url')
+            if ([string]::IsNullOrWhiteSpace($ReleaseUrl)) {
+                $ReleaseUrl = "$GitHubRepository/releases"
+            }
+            Start-Process -FilePath $ReleaseUrl
+            Set-ReleaseStatus 'Kein passendes Bridge-Archiv gefunden. GitHub-Release geöffnet.' $true
+            return
+        }
+        Install-BridgeFromRelease $SelectedRelease $SelectedAsset
+        Refresh-Status
+    } catch {
+        Write-ErrorStatus $_.Exception.Message
+    }
+})
 
 $SandboxBox.Add_SelectedIndexChanged({
     $Restricted = ([string]$SandboxBox.SelectedItem) -ne 'Unrestricted access'
     $WorkspaceLabel.Enabled = $Restricted
     $WorkspaceBox.Enabled = $Restricted
 })
+$ManagerPage.Add_Resize({ Resize-PageLayout })
+$SettingsPage.Add_Resize({ Resize-PageLayout })
 $DistributionBox.Add_SelectedIndexChanged({ Refresh-Status })
-$Form.Add_Shown({ Refresh-Status })
+$Form.Add_Shown({ Resize-PageLayout; Refresh-Status; Refresh-Releases })
 
 [void]$Form.ShowDialog()
