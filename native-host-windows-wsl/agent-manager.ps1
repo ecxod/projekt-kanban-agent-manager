@@ -118,8 +118,8 @@ function Write-ErrorStatus {
 }
 
 function Set-ReleaseStatus {
-    param([string]$Message, [bool]$Error = $false)
-    $ReleaseStatus.ForeColor = if ($Error) { [System.Drawing.Color]::DarkRed } else { [System.Drawing.Color]::DimGray }
+    param([string]$Message, [bool]$IsError = $false)
+    $ReleaseStatus.ForeColor = if ($IsError) { [System.Drawing.Color]::DarkRed } else { [System.Drawing.Color]::DimGray }
     $ReleaseStatus.Text = $Message
     [System.Windows.Forms.Application]::DoEvents()
 }
@@ -284,7 +284,7 @@ function Refresh-Releases {
         Write-Log "INFO: GitHub-Releases geladen: $($ReleaseGrid.Rows.Count); übersprungen: $Skipped"
     } catch {
         $ReleaseGrid.Rows.Clear()
-        Set-ReleaseStatus "GitHub-Releases konnten nicht geladen werden: $($_.Exception.Message)" $true
+        Set-ReleaseStatus "GitHub-Releases konnten nicht geladen werden: $($_.Exception.Message)" -IsError $true
         Write-Log "ERROR: GitHub-Releases konnten nicht geladen werden: $($_.Exception.Message) Quelle: $GitHubReleasesApi"
     }
 }
