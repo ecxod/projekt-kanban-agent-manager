@@ -569,8 +569,8 @@ $ManagerPage.Controls.Add($StatusBox)
 $LogBox = New-Object System.Windows.Forms.TextBox
 $LogBox.Multiline = $true
 $LogBox.ReadOnly = $true
-$LogBox.ScrollBars = 'Both'
-$LogBox.WordWrap = $false
+$LogBox.ScrollBars = 'Vertical'
+$LogBox.WordWrap = $true
 $LogBox.Dock = 'Fill'
 $LogBox.Font = New-Object System.Drawing.Font('Consolas', 9)
 $LogPage.Controls.Add($LogBox)
