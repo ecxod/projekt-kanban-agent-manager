@@ -219,33 +219,35 @@ function Install-BridgeFromRelease {
     }
 }
 
+function Get-GitHubReleases {
+    $Tls12 = [System.Net.SecurityProtocolType]::Tls12
+    [System.Net.ServicePointManager]::SecurityProtocol = $Tls12
+    Write-Log "INFO: GitHub-Releases angefragt: $GitHubReleasesApi"
+    $Response = Invoke-RestMethod -Method Get -Uri $GitHubReleasesApi -Headers @{
+            Accept = 'application/vnd.github+json'
+            'User-Agent' = 'Projekt-Kanban-Agent-Manager'
+        } -UseBasicParsing -TimeoutSec 15
+
+    if ($null -eq $Response) {
+        Write-Log 'INFO: GitHub API hat eine leere Release-Liste zurückgegeben.'
+        return @()
+    }
+
+    $ApiMessage = [string](Get-JsonPropertyValue $Response 'message')
+    $ApiDocumentation = [string](Get-JsonPropertyValue $Response 'documentation_url')
+    $ApiTag = Get-JsonPropertyValue $Response 'tag_name'
+    if ($ApiMessage -and $null -eq $ApiTag) {
+        $ApiDetails = if ($ApiDocumentation) { " Details: $ApiDocumentation" } else { '' }
+        throw "GitHub API meldet: $ApiMessage.$ApiDetails"
+    }
+
+    return @($Response)
+}
+
 function Refresh-Releases {
     try {
         Set-ReleaseStatus 'GitHub-Releases werden geladen …'
-        $Tls12 = [System.Net.SecurityProtocolType]::Tls12
-        [System.Net.ServicePointManager]::SecurityProtocol = $Tls12
-        Write-Log "INFO: GitHub-Releases angefragt: $GitHubReleasesApi"
-        $Response = Invoke-RestMethod -Method Get -Uri $GitHubReleasesApi -Headers @{
-                Accept = 'application/vnd.github+json'
-                'User-Agent' = 'Projekt-Kanban-Agent-Manager'
-            } -UseBasicParsing -TimeoutSec 15
-
-        $Releases = @()
-        if ($null -eq $Response) {
-            Write-Log 'INFO: GitHub API hat eine leere Release-Liste zurückgegeben.'
-        } else {
-            $ApiMessage = [string](Get-JsonPropertyValue $Response 'message')
-            $ApiDocumentation = [string](Get-JsonPropertyValue $Response 'documentation_url')
-            $ApiTag = Get-JsonPropertyValue $Response 'tag_name'
-            if ($ApiMessage -and $null -eq $ApiTag) {
-                $ApiDetails = if ($ApiDocumentation) { " Details: $ApiDocumentation" } else { '' }
-                throw "GitHub API meldet: $ApiMessage.$ApiDetails"
-            }
-            $Releases = @($Response)
-            if ($Releases.Count -eq 0) {
-                Write-Log 'INFO: GitHub API hat eine leere Release-Liste zurückgegeben.'
-            }
-        }
+        $Releases = @(Get-GitHubReleases)
 
         $ReleaseGrid.Rows.Clear()
         $Skipped = 0
@@ -288,18 +290,22 @@ function Refresh-Releases {
 }
 
 function Update-BridgeFromLatestRelease {
-    Refresh-Releases
-    if ($ReleaseGrid.Rows.Count -eq 0) {
-        throw 'Auf GitHub wurde kein Manager-Release mit Windows-WSL-Bridge gefunden.'
+    Set-ReleaseStatus 'GitHub-Release für die Bridge wird gesucht …'
+    $Releases = @(Get-GitHubReleases)
+    foreach ($Release in $Releases) {
+        $LatestAsset = Get-ReleaseBridgeAsset $Release
+        if ($null -ne $LatestAsset) {
+            $Version = Get-ReleaseVersion $Release
+            Write-Log "INFO: Passendes Windows-WSL-Bridge-Archiv gefunden: Release $Version"
+            Install-BridgeFromRelease $Release $LatestAsset
+            Refresh-Status
+            return
+        }
     }
-    $LatestRelease = $ReleaseGrid.Rows[0].Tag
-    $LatestAsset = Get-ReleaseBridgeAsset $LatestRelease
-    if ($null -eq $LatestAsset) {
-        $Version = Get-ReleaseVersion $LatestRelease
-        throw "Das GitHub-Release $Version enthält kein passendes Windows-WSL-Bridge-Archiv."
+    if ($Releases.Count -eq 0) {
+        throw "GitHub ist erreichbar, aber es gibt noch kein veröffentlichtes Manager-Release. Quelle: $GitHubRepository/releases"
     }
-    Install-BridgeFromRelease $LatestRelease $LatestAsset
-    Refresh-Status
+    throw "GitHub-Releases sind vorhanden, aber keines enthält das erwartete Windows-WSL-Bridge-Archiv (projekt-kanban-agent-manager-<version>-windows-wsl.zip). Quelle: $GitHubRepository/releases"
 }
 
 function Get-Distribution {
