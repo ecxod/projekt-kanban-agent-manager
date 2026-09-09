@@ -825,7 +825,7 @@ class NativeHost:
         self.stop_event = threading.Event()
 
     def send(self, message: dict[str, Any]) -> None:
-        encoded = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        encoded = json.dumps(message, ensure_ascii=True, separators=(",", ":")).encode("ascii")
         if len(encoded) > MAX_NATIVE_MESSAGE:
             encoded = json.dumps({
                 "kind": "event",
