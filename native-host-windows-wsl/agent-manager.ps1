@@ -1056,7 +1056,16 @@ $TestButton = Add-ActionButton 'Test Codex connection' 180 {
             [string]$AgentInput.Workspace
         )
         $ConnectionTestTimer.Start()
-    } catch { Write-ErrorStatus $_.Exception.Message }
+    } catch {
+        $ConnectionTestTimer.Stop()
+        if ($null -ne $script:ConnectionTestJob) {
+            Stop-Job -Job $script:ConnectionTestJob -ErrorAction SilentlyContinue
+            Remove-Job -Job $script:ConnectionTestJob -Force -ErrorAction SilentlyContinue
+            $script:ConnectionTestJob = $null
+        }
+        Write-ErrorStatus $_.Exception.Message
+        Update-ActionButtons $true ([pscustomobject]@{ enabled = $true })
+    }
 } -Panel $ManagerSecondButtonRow
 
 $UninstallButton = Add-ActionButton 'Uninstall Windows bridge' 190 {
