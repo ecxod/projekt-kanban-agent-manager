@@ -284,6 +284,7 @@ function Refresh-Releases {
 
         $ReleaseGrid.Rows.Clear()
         $Skipped = 0
+        $ReleaseRows = @()
         foreach ($Release in $Releases) {
             $Tag = [string](Get-JsonPropertyValue $Release 'tag_name')
             if ([string]::IsNullOrWhiteSpace($Tag)) {
@@ -292,16 +293,42 @@ function Refresh-Releases {
             }
             $Name = [string](Get-JsonPropertyValue $Release 'name')
             if (-not $Name) { $Name = $Tag }
-            $Published = [string](Get-JsonPropertyValue $Release 'published_at')
-            if ($Published) {
-                try { $Published = ([datetime]$Published).ToLocalTime().ToString('yyyy-MM-dd HH:mm') } catch {}
+            $PublishedValue = [string](Get-JsonPropertyValue $Release 'published_at')
+            $PublishedAt = [datetime]::MinValue
+            $Published = $PublishedValue
+            if ($PublishedValue) {
+                try {
+                    $PublishedDate = ([datetime]$PublishedValue).ToLocalTime()
+                    $PublishedAt = $PublishedDate
+                    $Published = $PublishedDate.ToString('yyyy-MM-dd HH:mm')
+                } catch {}
             }
             $Draft = [bool](Get-JsonPropertyValue $Release 'draft')
             $Prerelease = [bool](Get-JsonPropertyValue $Release 'prerelease')
             $State = if ($Draft) { 'Entwurf' } elseif ($Prerelease) { 'Vorabversion' } else { 'Release' }
             $Assets = @(Get-JsonPropertyValue $Release 'assets').Count
-            $RowIndex = $ReleaseGrid.Rows.Add($Tag, $Name, $Published, $State, [string]$Assets)
-            $ReleaseGrid.Rows[$RowIndex].Tag = $Release
+            $ReleaseRows += [pscustomobject]@{
+                Release = $Release
+                Tag = $Tag
+                Name = $Name
+                Published = $Published
+                PublishedAt = $PublishedAt
+                State = $State
+                Assets = [string]$Assets
+            }
+        }
+        foreach ($ReleaseRow in @($ReleaseRows | Sort-Object -Property @(
+            @{ Expression = 'PublishedAt'; Descending = $true },
+            @{ Expression = 'Tag'; Descending = $true }
+        )) ) {
+            $RowIndex = $ReleaseGrid.Rows.Add(
+                $ReleaseRow.Tag,
+                $ReleaseRow.Name,
+                $ReleaseRow.Published,
+                $ReleaseRow.State,
+                $ReleaseRow.Assets
+            )
+            $ReleaseGrid.Rows[$RowIndex].Tag = $ReleaseRow.Release
         }
         if ($ReleaseGrid.Rows.Count -eq 0) {
             if ($Skipped -gt 0) {
@@ -312,7 +339,7 @@ function Refresh-Releases {
         } else {
             $ReleaseGrid.Rows[0].Selected = $true
             $SkippedText = if ($Skipped -gt 0) { " $Skipped Eintrag(e) übersprungen." } else { '' }
-            Set-ReleaseStatus "$($ReleaseGrid.Rows.Count) Release(s) geladen.$SkippedText Für das neueste Release „Update Bridge“ klicken."
+            Set-ReleaseStatus "$($ReleaseGrid.Rows.Count) Release(s) geladen.$SkippedText Nach Veröffentlichungsdatum absteigend sortiert. Für das neueste Release „Update Bridge“ klicken."
         }
         Write-Log "INFO: GitHub-Releases geladen: $($ReleaseGrid.Rows.Count); übersprungen: $Skipped"
     } catch {
@@ -670,7 +697,7 @@ $ReleaseGrid.MultiSelect = $false
 $ReleaseGrid.RowHeadersVisible = $false
 $ReleaseGrid.SelectionMode = 'FullRowSelect'
 $ReleaseGrid.ClipboardCopyMode = 'EnableAlwaysIncludeHeaderText'
-$ReleaseGrid.AutoSizeColumnsMode = 'Fill'
+$ReleaseGrid.AutoSizeColumnsMode = 'None'
 $ReleaseGrid.AutoSizeRowsMode = 'AllCells'
 $ReleaseGrid.ColumnHeadersHeightSizeMode = 'AutoSize'
 $ReleaseGrid.BackgroundColor = [System.Drawing.SystemColors]::Window
@@ -683,11 +710,11 @@ $ReleaseGrid.DefaultCellStyle.WrapMode = 'True'
 [void]$ReleaseGrid.Columns.Add('published', 'Veröffentlicht')
 [void]$ReleaseGrid.Columns.Add('state', 'Status')
 [void]$ReleaseGrid.Columns.Add('assets', 'Dateien')
-$ReleaseGrid.Columns['version'].FillWeight = 20
-$ReleaseGrid.Columns['name'].FillWeight = 34
-$ReleaseGrid.Columns['published'].FillWeight = 22
-$ReleaseGrid.Columns['state'].FillWeight = 16
-$ReleaseGrid.Columns['assets'].FillWeight = 10
+$ReleaseGrid.Columns['version'].AutoSizeMode = 'AllCells'
+$ReleaseGrid.Columns['published'].AutoSizeMode = 'AllCells'
+$ReleaseGrid.Columns['state'].AutoSizeMode = 'AllCells'
+$ReleaseGrid.Columns['assets'].AutoSizeMode = 'AllCells'
+$ReleaseGrid.Columns['name'].AutoSizeMode = 'Fill'
 $ReleasesPage.Controls.Add($ReleaseGrid)
 
 $ReleaseActionPanel = New-Object System.Windows.Forms.FlowLayoutPanel
