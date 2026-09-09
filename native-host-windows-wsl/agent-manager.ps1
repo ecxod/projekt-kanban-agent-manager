@@ -715,6 +715,9 @@ $ReleaseGrid.Columns['published'].AutoSizeMode = 'AllCells'
 $ReleaseGrid.Columns['state'].AutoSizeMode = 'AllCells'
 $ReleaseGrid.Columns['assets'].AutoSizeMode = 'AllCells'
 $ReleaseGrid.Columns['name'].AutoSizeMode = 'Fill'
+foreach ($ColumnName in @('version', 'published', 'state', 'assets')) {
+    $ReleaseGrid.Columns[$ColumnName].DefaultCellStyle.WrapMode = [System.Windows.Forms.DataGridViewTriState]::False
+}
 $ReleasesPage.Controls.Add($ReleaseGrid)
 
 $ReleaseActionPanel = New-Object System.Windows.Forms.FlowLayoutPanel
