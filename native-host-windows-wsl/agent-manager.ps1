@@ -463,7 +463,9 @@ $TestButton = $null
 $EnableButton = $null
 $DisableButton = $null
 $UninstallButton = $null
-$ConnectionTestWorker = New-Object System.ComponentModel.BackgroundWorker
+$script:ConnectionTestJob = $null
+$ConnectionTestTimer = New-Object System.Windows.Forms.Timer
+$ConnectionTestTimer.Interval = 250
 
 function Update-ActionButtons {
     param([bool]$BridgeAvailable, [object]$Agent)
@@ -914,41 +916,105 @@ $DisableButton = Add-ActionButton 'Disable agent and cancel runs' 220 {
     } catch { Write-ErrorStatus $_.Exception.Message }
 } -Panel $ManagerFirstButtonRow
 
-$ConnectionTestWorker.Add_DoWork({
-    param($Sender, $EventArgs)
-    $AgentInput = $EventArgs.Argument
+$ConnectionTestJobScript = {
+    param(
+        [string]$WslExecutable,
+        [string]$Distribution,
+        [string]$InstalledHost,
+        [string]$AgentId,
+        [string]$Label,
+        [string]$Executable,
+        [string]$Sandbox,
+        [string]$Workspace
+    )
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+
+    $HostPathOutput = @(& $WslExecutable --distribution $Distribution --exec wslpath -a -u $InstalledHost)
+    if ($LASTEXITCODE -ne 0 -or $HostPathOutput.Count -eq 0) {
+        throw 'Der installierte Host-Pfad konnte nicht nach WSL übersetzt werden.'
+    }
+    $HostPath = ([string]$HostPathOutput[-1]).Trim()
+    if (-not $HostPath.StartsWith('/')) {
+        throw "WSL hat einen ungültigen Host-Pfad zurückgegeben: $HostPath"
+    }
+
+    function Invoke-JobHost {
+        param([string[]]$Arguments)
+        $Output = @(& $WslExecutable --distribution $Distribution --exec python3 $HostPath @Arguments 2>&1)
+        $Text = ($Output -join "`n").Trim()
+        if (-not $Text) {
+            throw 'Der Native Host hat nicht geantwortet.'
+        }
+        try {
+            $Response = $Text | ConvertFrom-Json
+        } catch {
+            throw "Ungültige Antwort des Native Host: $Text"
+        }
+        if ($Response.ok -ne $true) {
+            $ErrorProperty = $Response.PSObject.Properties['error']
+            if ($null -ne $ErrorProperty -and $null -ne $ErrorProperty.Value) {
+                $ErrorObject = $ErrorProperty.Value
+                $MessageProperty = $ErrorObject.PSObject.Properties['message']
+                if ($null -ne $MessageProperty -and $MessageProperty.Value) {
+                    throw ([string]$MessageProperty.Value)
+                }
+            }
+            throw $Text
+        }
+        return $Response.data
+    }
+
+    if ($Sandbox -eq 'danger-full-access') {
+        $Workspace = '__HOME__'
+    }
+    $Saved = Invoke-JobHost @(
+        '--manager-configure-local', $AgentId, $Label, $Executable, $Sandbox, $Workspace
+    )
+    $Data = Invoke-JobHost @('--manager-test', $AgentId)
+    [pscustomobject]@{
+        Succeeded = $true
+        Saved = $Saved
+        Data = $Data
+    }
+}
+
+$ConnectionTestTimer.Add_Tick({
+    if ($null -eq $script:ConnectionTestJob) {
+        $ConnectionTestTimer.Stop()
+        return
+    }
+    $State = [string]$script:ConnectionTestJob.State
+    if ($State -in @('NotStarted', 'Running', 'Blocked')) {
+        return
+    }
+
+    $Result = $null
+    $ErrorMessage = $null
     try {
-        $Saved = Save-AgentConfigurationValues `
-            -Distribution $AgentInput.Distribution `
-            -AgentId $AgentInput.AgentId `
-            -Label $AgentInput.Label `
-            -Executable $AgentInput.Executable `
-            -Sandbox $AgentInput.Sandbox `
-            -Workspace $AgentInput.Workspace
-        $Data = Invoke-ManagerHostForDistribution `
-            -Distribution $AgentInput.Distribution `
-            -Arguments @('--manager-test', $AgentInput.AgentId)
-        $EventArgs.Result = [pscustomobject]@{
-            Succeeded = $true
-            Saved = $Saved
-            Data = $Data
+        if ($State -eq 'Completed') {
+            $Results = @(Receive-Job -Job $script:ConnectionTestJob -ErrorAction Stop)
+            if ($Results.Count -eq 0) {
+                throw 'Der Verbindungstest hat kein Ergebnis zurückgegeben.'
+            }
+            $Result = $Results[-1]
+        } else {
+            $Reason = $script:ConnectionTestJob.ChildJobs[0].JobStateInfo.Reason
+            $ErrorMessage = if ($null -ne $Reason) { [string]$Reason.Message } else { "Der Hintergrundtest endete mit Status: $State" }
         }
     } catch {
-        $EventArgs.Result = [pscustomobject]@{
-            Succeeded = $false
-            ErrorMessage = $_.Exception.Message
-        }
+        $ErrorMessage = $_.Exception.Message
+    } finally {
+        $ConnectionTestTimer.Stop()
+        Remove-Job -Job $script:ConnectionTestJob -Force -ErrorAction SilentlyContinue
+        $script:ConnectionTestJob = $null
     }
-})
 
-$ConnectionTestWorker.Add_RunWorkerCompleted({
-    param($Sender, $EventArgs)
-    if ($null -ne $EventArgs.Error) {
-        Write-ErrorStatus $EventArgs.Error.Message
+    if ($ErrorMessage) {
+        Write-ErrorStatus $ErrorMessage
         Update-ActionButtons $true ([pscustomobject]@{ enabled = $true })
         return
     }
-    $Result = $EventArgs.Result
     if ($null -eq $Result -or -not $Result.Succeeded) {
         $Message = if ($null -ne $Result -and $Result.ErrorMessage) { [string]$Result.ErrorMessage } else { 'Der Verbindungstest ist fehlgeschlagen.' }
         Write-ErrorStatus $Message
@@ -968,7 +1034,7 @@ $ConnectionTestWorker.Add_RunWorkerCompleted({
 })
 
 $TestButton = Add-ActionButton 'Test Codex connection' 180 {
-    if ($ConnectionTestWorker.IsBusy) {
+    if ($null -ne $script:ConnectionTestJob) {
         return
     }
     try {
@@ -979,7 +1045,17 @@ $TestButton = Add-ActionButton 'Test Codex connection' 180 {
             }
         }
         Write-Status 'Verbindungstest läuft im Hintergrund. Die Antwort kann bis zu 90 Sekunden dauern …'
-        $ConnectionTestWorker.RunWorkerAsync($AgentInput)
+        $script:ConnectionTestJob = Start-Job -ScriptBlock $ConnectionTestJobScript -ArgumentList @(
+            [string]$WslCommand.Path,
+            [string]$AgentInput.Distribution,
+            [string]$InstalledHost,
+            [string]$AgentInput.AgentId,
+            [string]$AgentInput.Label,
+            [string]$AgentInput.Executable,
+            [string]$AgentInput.Sandbox,
+            [string]$AgentInput.Workspace
+        )
+        $ConnectionTestTimer.Start()
     } catch { Write-ErrorStatus $_.Exception.Message }
 } -Panel $ManagerSecondButtonRow
 
@@ -1019,5 +1095,15 @@ $SettingsPage.Add_Resize({ Resize-PageLayout })
 $LogPage.Add_Resize({ Update-LogScrollBar })
 $DistributionBox.Add_SelectedIndexChanged({ Refresh-Status })
 $Form.Add_Shown({ Resize-PageLayout; Refresh-Status; Refresh-Releases })
+$Form.Add_FormClosing({
+    if ($null -ne $ConnectionTestTimer) {
+        $ConnectionTestTimer.Stop()
+    }
+    if ($null -ne $script:ConnectionTestJob) {
+        Stop-Job -Job $script:ConnectionTestJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $script:ConnectionTestJob -Force -ErrorAction SilentlyContinue
+        $script:ConnectionTestJob = $null
+    }
+})
 
 [void]$Form.ShowDialog()
