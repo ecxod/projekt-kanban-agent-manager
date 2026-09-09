@@ -1,8 +1,8 @@
 # Projekt Kanban Agent Manager
 
-Manager version: `0.1.8.3`
+Manager version: `0.1.8.19`
 
-Native Host version: `0.1.8.3`
+Native Host version: `0.1.8.19`
 
 This folder contains the standalone Windows/WSL agent manager and bridge.
 The Firefox add-on is maintained separately in:
@@ -33,16 +33,23 @@ The manager can:
 The agent is started on demand for a confirmed task from Firefox. The manager
 does not keep a permanent Codex process running.
 
+## Installation
+
+See [`INSTALL.md`](INSTALL.md) for the complete Windows/WSL/Firefox setup.
+
 ## Recommended first configuration
 
 Use these values for debugging the cloned project:
 
 ```text
 Agent ID:                    local-codex
-Agent executable (WSL):      /mnt/c/Users/Christian/.codex/bin/wsl/codex
+Agent executable (WSL):      /home/christian/.nvm/versions/node/v22.23.2/bin/codex
 Access mode:                 Read-only (Dry Run)
 Workspace (WSL):             /mnt/c/Users/Christian/projekt-kanban-agent-addon
 ```
+
+Use the executable returned by `command -v codex` inside the selected WSL
+distribution. Do not use the internal `codex.js` path.
 
 After the bridge self-test and connection test pass, use
 `Workspace write` only when the agent should modify files.
