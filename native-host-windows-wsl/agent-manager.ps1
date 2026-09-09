@@ -30,6 +30,7 @@ $InstallScript = Join-Path $ScriptDirectory 'install.ps1'
 $UninstallScript = Join-Path $ScriptDirectory 'uninstall.ps1'
 $InstallDirectory = Join-Path $env:LOCALAPPDATA 'ProjektKanbanAgent'
 $InstalledHost = Join-Path $InstallDirectory 'kanban_agent_host.py'
+$DefaultCodexExecutable = '/home/christian/.nvm/versions/node/v22.23.2/bin/codex'
 $VersionFile = Join-Path $PackageDirectory 'VERSION'
 if (-not (Test-Path -LiteralPath $VersionFile -PathType Leaf)) {
     throw "Die Versionsdatei fehlt: $VersionFile"
@@ -632,7 +633,7 @@ Add-Label 'Display name' 182 $SettingsPage | Out-Null
 $AgentLabelBox = New-TextBox 182 'Codex in WSL' $SettingsPage
 $AgentLabelBox.Anchor = $AnchorLeftRight
 Add-Label 'Agent executable (WSL)' 224 $SettingsPage | Out-Null
-$ExecutableBox = New-TextBox 224 "/mnt/c/Users/$env:USERNAME/.codex/bin/wsl/codex" $SettingsPage
+$ExecutableBox = New-TextBox 224 $DefaultCodexExecutable $SettingsPage
 $ExecutableBox.Anchor = $AnchorLeftRight
 Add-Label 'Access mode' 266 $SettingsPage | Out-Null
 $SandboxBox = New-Object System.Windows.Forms.ComboBox
@@ -817,7 +818,7 @@ $HelpRows = @(
     @('WSL distribution', 'Die WSL-Distribution, in der der Native Host und Codex ausgeführt werden.'),
     @('Agent ID', 'Eindeutige interne Kennung des Agenten, zum Beispiel local-codex.'),
     @('Display name', 'Lesbarer Name des Agenten, der in Statusmeldungen angezeigt wird.'),
-    @('Agent executable (WSL)', 'Absoluter WSL-Pfad zum Codex-Programm, zum Beispiel /mnt/c/Users/Christian/.codex/bin/wsl/codex.'),
+    @('Agent executable (WSL)', 'Absoluter WSL-Pfad zum Codex-Programm, zum Beispiel /home/christian/.nvm/versions/node/v22.23.2/bin/codex.'),
     @('Access mode', 'Legt fest, welche Änderungen der Agent durchführen darf.'),
     @('Workspace (WSL)', 'Arbeitsverzeichnis des Agenten. Bei eingeschränktem Zugriff darf er nur dort arbeiten.'),
     @('Read-only (Dry Run)', 'Der Agent darf analysieren und einen Plan erstellen, aber keine Dateien ändern.'),
