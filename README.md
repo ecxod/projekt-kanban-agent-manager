@@ -1,5 +1,7 @@
 # Projekt Kanban Agent Manager
 
+[Installation](INSTALL.md) · [Latest Manager/Bridge Release](https://github.com/ecxod/projekt-kanban-agent-manager/releases/latest) · [Firefox Add-on](https://github.com/ecxod/projekt-kanban-agent-addon)
+
 Manager version: `0.1.8.19`
 
 Native Host version: `0.1.8.19`
